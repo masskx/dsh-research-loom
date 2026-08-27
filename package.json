@@ -1,0 +1,50 @@
+{
+  "name": "dsh-academic-research-skills",
+  "version": "0.1.0",
+  "description": "Academic Research Skills (ARS) for DeepSeek Harness: 4 research/writing/review skills (deep-research, academic-paper, academic-paper-reviewer, academic-pipeline) plus 16 /ars-* commands, ported from the ARS Claude Code plugin (upstream: Imbad0202/academic-research-skills, CC-BY-NC-4.0).",
+  "type": "module",
+  "main": "lib/startup.js",
+  "exports": {
+    ".": "./lib/startup.js",
+    "./startup": "./lib/startup.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "skills",
+    "commands",
+    "cordis.patch.yml",
+    "README.md",
+    "NOTICE.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "academic",
+    "research",
+    "deep-research",
+    "literature-review",
+    "systematic-review",
+    "paper-writing",
+    "peer-review",
+    "scholarly-publishing"
+  ],
+  "author": {
+    "name": "nullptr-DZF",
+    "url": "https://github.com/nullptr-DZF"
+  },
+  "license": "CC-BY-NC-4.0",
+  "homepage": "https://github.com/nullptr-DZF/dsh-academic-research-skills",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nullptr-DZF/dsh-academic-research-skills.git"
+  },
+  "dependencies": {}
+}
