@@ -167,6 +167,18 @@ dsh plugin --profile web remove dsh-academic-research-skills
 Windows 安装全局 DSH 后若命令找不到，重新打开终端。保留完整错误信息到本仓库 Issues
 反馈，提交前移除凭据及私人路径。不要把 SSH 私钥或 API Key 写入安装命令。
 
+### 启动时报端口错误
+
+`EADDRINUSE` 表示端口已被占用；Windows 上的 `listen EACCES` 也可能由系统保留
+端口造成，即使看不到监听进程也会发生。可以换一个可用端口，例如：
+
+```bash
+dsh web --port 3001
+```
+
+以终端实际输出的地址为准。如果日志已显示 `registered 20 skills (enabled)`，
+说明学术技能注册已完成，随后出现的监听端口错误不需要重新安装插件。
+
 ### 材料状态不准确
 
 自动盘点只读取工作区文件索引中的路径和文件类型，不读取正文。建议使用清晰的
