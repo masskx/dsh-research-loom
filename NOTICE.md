@@ -2,6 +2,15 @@
 
 ## 本仓库是什么 / What this is
 
+本仓库以 **研序 · Research Loom** 发布，由 [masskx](https://github.com/masskx) 维护，
+基于 [nullptr-DZF/dsh-academic-research-skills](https://github.com/nullptr-DZF/dsh-academic-research-skills)
+二次开发。新增交互式论文工作台、材料纠正、任务回流、项目记忆与安装文档。
+内部包名保留 `dsh-academic-research-skills`。下文保留原始移植层及学术技能的署名。
+
+This repository is maintained by masskx as **Research Loom**, derived from the DSH
+port by nullptr-DZF. New work includes the interactive workbench, material corrections,
+task tracking, project memory and user documentation, under the same CC-BY-NC-4.0 license.
+
 `dsh-academic-research-skills` 是 DeepSeek Harness（DSH）插件形态的
 **Academic Research Skills (ARS)** 移植版。ARS 原本是 Claude Code 插件
 （research → write → review → revise → finalize 的契约审计学术流水线）。
@@ -42,4 +51,5 @@ porting layer (registrar, bundle patch, packaging, docs) is new work by
 ## 打包者 / Packager
 
 - GitHub: https://github.com/nullptr-DZF
-- 本仓库 / This repo: https://github.com/nullptr-DZF/dsh-academic-research-skills
+- 原始移植仓库 / Original DSH port: https://github.com/nullptr-DZF/dsh-academic-research-skills
+- 当前仓库 / This repository: https://github.com/masskx/dsh-research-loom

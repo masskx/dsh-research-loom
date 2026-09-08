@@ -1,4 +1,7 @@
 node_modules/
 *.log
+*.tgz
+output/
+.playwright-cli/
 .DS_Store
 Thumbs.db
