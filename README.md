@@ -1,146 +1,154 @@
 # 研序 · Research Loom
 
-**让科研有序推进：从课题起步、文献整理，到论文写作、评审与投稿。**
+DeepSeek Harness 的学术科研插件：从读懂初稿、找到研究方向，到逐条返修，让下一步更清楚。
 
-Research Loom 是 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness)
-的学术科研插件。安装后，在 DSH 对话页打开右侧“论文工作台”，查看材料、推进模块任务，
-并把研究背景传递到下一阶段。**不必记住斜杠命令。**
+**不用记斜杠命令。打开论文工作台，选择你的场景，检查任务建议后发送即可。**
 
-当前版本：**0.7.0** · 已验证宿主：**DSH 0.1.1-rc.2** · 许可：**CC-BY-NC-4.0（非商业）**
+当前版本 **0.9.0** · 已验证宿主 **DSH 0.1.1-rc.2** · **CC-BY-NC-4.0（非商业）**
 
-[快速安装](#快速安装) · [安装后是什么样](#安装后是什么样) · [第一次使用](#第一次使用) ·
-[完整安装与排错](docs/INSTALL.zh-CN.md) · [后续计划](docs/ROADMAP.zh-CN.md) · [English](#english)
+[安装](#安装插件) · [使用效果](#安装后会看到什么) · [三种使用流程](#选择你的使用场景) · [完整操作指南](docs/USAGE.zh-CN.md) · [安装排错](docs/INSTALL.zh-CN.md) · [后续计划](docs/ROADMAP.zh-CN.md)
 
-## 快速安装
+## 安装插件
 
-先安装 [Node.js](https://nodejs.org/)（20 或以上，推荐当前 LTS）和 [Git](https://git-scm.com/downloads)。
-打开终端：Windows 可用 PowerShell，macOS / Linux 可用系统终端。
+以下假设你**已经安装好 DeepSeek Harness**，终端能使用 `dsh`。无需重新安装宿主。
+若还没安装，请先按 [DSH 官方说明](https://github.com/deepseek-ai/deepseek-harness)完成宿主安装。
+
+在运行 DSH 的那台电脑（远程部署则是服务器）打开终端：
 
 ```bash
-# 检查环境
-node --version
-npm --version
-git --version
+# 确认宿主版本；当前验证版本为 0.1.1-rc.2
+dsh --version
 
-# 安装当前验证过的 DeepSeek Harness
-npm install -g @deepseek-ai/dsh@0.1.1-rc.2
-
-# 从本仓库安装插件到 Web profile
+# 先等待正在执行的任务结束，停止 dsh web，再安装插件
 dsh plugin --profile web add github:masskx/dsh-research-loom
 
-# 启动，在浏览器中打开终端显示的地址
+# 重新启动，打开终端显示的地址
 dsh web
 ```
 
-已有兼容版本的 DSH，可以跳过安装 DSH 的那一步。普通使用者**不需要克隆仓库、安装 pnpm 或编译源码**；
-仓库已经包含构建后的前端代码。
+普通用户**不需要克隆仓库、安装 pnpm 或编译**。仓库自带构建产物；安装时需要能访问 GitHub 和包下载服务，并有可用的 Git 和宿主所需的 Node.js 环境。
+安装与使用必须是同一个 DSH `web` profile。
 
-第一次运行 DSH，还需要按照 DSH 的引导配置可用的模型服务和凭据，并在对话中选择模型。
-插件本身不提供 API Key 或模型额度。材料路径盘点不调用模型；生成研究结果会使用当前 DSH 模型和工具，
-可能产生相应费用。联网检索和 PDF/DOCX 正文读取取决于宿主中可用的工具。
+内部包名保留 `dsh-academic-research-skills`，设置开关名称仍为 **Academic Research Skills**，以兼容已有用户。
+请使用上述 GitHub 地址，不要安装同名 npm 包来代替本项目。
 
-> 仓库名为 `dsh-research-loom`，内部插件包名暂时保留 `dsh-academic-research-skills`，
-> 设置卡片仍显示 **Academic Research Skills**，以兼容已有安装。
-> 本项目目前通过 GitHub 安装，不要用同名 npm 包代替本仓库版本。
+### 使用前只检查三件事
 
-## 安装后是什么样
+1. **选好工作区**：在 DSH 中添加或选择论文项目文件夹，并进入其对话。空文件夹也可以；不要求固定命名模板。
+2. **模型可用**：普通 DSH 对话能正常回复。插件不提供 API Key 或额度；扫描路径不调用模型，发送生成任务会使用当前模型及额度。
+3. **工具匹配任务**：读 PDF/DOCX 需要宿主可用的文档读取工具，联网研究需要检索工具及网络权限。插件不自带 OCR、数据库订阅或独立搜索服务；读不了可提供文本摘录，不能联网时可先用本地资料。
 
-在 DSH 中选择一个论文工作区，打开会话，便能看到“论文工作台”入口：
+## 安装后会看到什么
 
-- 空白新会话：入口位于输入框上方，不必先发送消息。
-- 已有对话：入口位于会话标题栏。
-- 点击入口：在右侧展开工作台；点击 `×` 收起。桌面布局会为侧栏预留空间，极窄屏幕使用可关闭浮层。
+进入论文工作区后，“论文工作台”入口出现在空白会话输入框上方，或已有会话标题栏。
+点击后展开右侧栏，`×` 可收起。桌面布局为侧栏预留空间；极窄屏幕使用可关闭浮层。
 
-工作台有三个视图，下面是 **0.7.0 真实组件在隔离演示项目中的截图**，不含私人论文。
-截图展示界面和操作，不代表模型已经完成真实文献研究。
+首页只需选择 **已有论文 / 从零开始 / 论文返修**。每个入口提供三步引导，说明先准备什么、会得到什么；
+“准备任务到对话框”会填入可编辑提示词，**不会自动发送**。研究结果在 DSH 主对话和工作区文件中查看，不在侧栏内另开聊天。
 
-| 概览：下一步与课题起步 | 材料：归类与缺失依据 | 流程：模块与研究状态 |
-| --- | --- | --- |
-| ![概览视图](docs/images/overview.png) | ![材料视图](docs/images/materials.png) | ![流程视图](docs/images/workflow.png) |
+![新手入口：三种场景](docs/images/overview.png)
 
-| 你想做什么 | 从哪里开始 | 能获得什么 |
-| --- | --- | --- |
-| 没有任何材料，开始新课题 | 概览 → 课题起步 → 在线检索资料 | 带时间窗、来源核验和研究方向比较要求的检索任务 |
-| 已经收集了几篇论文 | 课题起步 → 整理已有资料 | 文献盘点、矩阵、创新点/局限综合及后续计划任务 |
-| 基于现有论文补充最新进展 | 课题起步 → 已有资料 + 补充检索 | 先分析本地资料，再针对研究缺口检索、合并去重 |
-| 看清论文缺少什么 | 材料 / 流程 | 路径匹配证据、已有/缺失材料，以及可纠正的归类 |
-| 推进研究设计、初稿或返修 | 流程 → 选择模块 | 携带材料、研究背景和目标要求的可编辑任务建议 |
-| 查看任务产物 | 概览 → 最近任务 | 执行状态、新增候选文件、人工验收入口 |
-| 下次接着研究或换电脑 | 项目记忆 / 导出与导入 | 保留研究方向、关键结论、待解决问题和材料归类 |
+截图来自真实组件的隔离演示项目，不含私人论文，不代表模型已执行真实研究。
 
-这里的“生成任务”会把结构化提示提交到 DSH 对话；实际研究内容由所选模型和可用工具执行。
-插件不会仅因发现一个文件，就声称它已读过全文或已通过学术质量审查。
+首页只展示当前任务，一个主要按钮。填入提示词后会提示你到主对话检查并发送；
+任务下方的步骤选择框可随时切换，不需要逐步解锁。四个视图各司其职：
 
-## 第一次使用
+- **开始**：选择场景，准备当前任务；不展示评分和设置列表。
+- **材料**：查看候选文件、纠正归类、限定扫描范围。文件名匹配不等于已读全文。
+- **流程**：查看各模块已有与缺少的材料，选择论文类型、目标标准，并手动确认研究状态。不适用的阶段可以排除。
+- **更多**：项目记忆、投稿指南、最近任务，以及评分、检索和迁移工具。
 
-1. 在 DSH 左侧添加论文所在文件夹作为工作区，进入该工作区的会话。
-2. 打开“论文工作台”，到“材料”检查候选文件。目录里混有其他项目时，限定论文子目录或排除无关目录。
-3. 选择论文流程：实证研究、理论研究、综述论文或自定义。实证流程会保留尚未产出数据的阶段。
-4. 从“课题起步”开始，或到“流程”点开目前正在进行的模块。
-5. 点击“填入对话框”检查和修改提示词，准备好后发送。也可点击“启动课题研究 / 生成模块结果”直接请求执行。
-6. 执行后检查对话和产物。任务可以人工验收，阶段则在“研究状态”中独立确认。
-7. 在“项目记忆”写下已确定方向和待解决问题；失焦后保存，后续模块任务会继承这些记录。
+## 选择你的使用场景
 
-如果输入框已有草稿，插件会追加建议并留在输入框中，即使点击直接启动也不会自动发送这份已有草稿。
+### A. 已经有一篇自己的论文
 
-### 例子：从几篇论文开始
+1. 将自己的初稿及相关参考文献放入工作区。打开 **开始 → 已有论文 → 检查论文**。
+2. 点击 **准备任务到对话框**，核对初稿路径、补充关注点，然后发送。助手先识别哪篇是你的稿件，再给结构诊断和优先修改清单。
+3. 核验清单后，选择 **逐项改进**，每轮只处理确认的范围；保留原稿，核对新版本及修改依据。
+4. 稿件准备好后选择 **准备投稿**，提供具体期刊/会议和作者指南，生成投稿检查清单。插件不会自动投稿。
 
-把已有论文放进工作区的 `sources/` 文件夹，选择“整理已有资料”，输入：
+如果你只有几篇别人发表的论文、还没有自己的初稿，请走下一场景的“收集与整理”。
 
-```text
-研究主题：跨领域少样本分类
-研究重点与约束：先比较现有方法的局限，优先考虑公开数据和可复现基线。
-请给出候选方向，不要在证据不足时断言首次提出某种方法。
-```
+### B. 刚开始科研，文件夹是空的
 
-任务会要求模型读取相关材料、建立文献矩阵、比较研究缺口，并提出 3–5 个候选方向。
-你确认方向后，将其记录到“项目记忆”，再进入“研究设计”，让下一模块沿用该背景。
-系统提示要求保留原始论文，只创建衍生笔记或新版本；实际文件操作由 DSH 权限机制控制。
+1. 创建空文件夹并在 DSH 打开，选择 **开始 → 从零开始 → 明确方向**。主题可以留空。
+2. 准备任务、发送并回答少量澄清问题，先确定兴趣、资源和可行方向。
+3. 选择 **收集与整理**：可把参考论文放进文件夹后在“材料”重新扫描，选择“只整理我提供的论文”；也可选择“联网检索”或“已有资料 + 补充检索”。发送前填好确认的研究主题。
+4. 核验来源、文献矩阵和候选研究缺口，再选择 **制定研究计划**，明确方法、里程碑和近期可执行任务。
 
-### 看懂状态和评分
+没有联网工具时不会凭空获得“最新论文”。搜索摘要、全文和无法访问的来源应明确区分，创新性判断需要证据。
 
-| 显示项 | 含义 |
-| --- | --- |
-| 圆环“材料完整度” | 根据路径和文件类型计算的材料覆盖情况，不是论文质量或录用概率 |
-| “材料齐全 / 部分具备 / 尚未发现” | 对预期材料类型的路径级判断，可以在“材料”里纠正 |
-| 研究状态与流程进度条 | 由研究者确认的推进情况，自动扫描不会替你确认阶段 |
-| “不适用” | 阶段不参与当前流程和评分，可在流程底部恢复 |
-| 深度评分 | 将建议量表和材料交给模型，要求读材料、提供分项证据并标出无法评价项 |
+### C. 收到审稿意见，需要返修
 
-SCI / EI 是快捷量表入口，并非统一的期刊或会议标准。在“概览 → 具体投稿目标与作者指南”
-填写实际刊会、指南来源和日期，后续任务会携带这些要求。评价结果仍需研究者核验。
+1. 将投稿原稿、编辑决定信和完整审稿意见放入工作区，选择 **开始 → 论文返修 → 梳理审稿意见**。
+2. 发送任务，补充返修轮次和期限，核对保留审稿人及原编号的意见清单与返修计划。
+3. 选择 **落实修改**：按确认计划生成修订新版本，逐条对应修改位置和证据；未做的实验/分析必须保持待办。
+4. 选择 **核对回复信**：对照真实修改拟逐点回复，检查意见遗漏、页码/章节和返修附件，最终由作者审核与提交。
+
+三种场景都能随时切换，不清空论文文件或项目记忆。**点下一步只是切换任务，不代表上一阶段完成。**
+详细的准备材料、验收方法、常见卡点见 [使用指南](docs/USAGE.zh-CN.md)。
+
+## 状态、评分和任务记录
+
+### 审稿之后，不用再手工拼接下一轮提示词
+
+0.9.0 新增 **审稿 → 修改 → 复核** 的最小闭环：
+
+1. 在有审稿回复的同一个 DSH 会话，打开“开始”下方的 **已有审稿结果？接着修改与复核**。
+2. 选择一份已结束的审稿回复（可预览），填写自己的原稿路径，点击 **整理这份审稿结果**。这会发送一次模型任务，读取原稿并提取结构化问题清单，不修改论文。
+3. 查看问题、涉及章节和待补证据，填写 **本轮授权的文字修改范围**，点击 **授权本轮修改并执行**。
+4. 保持工作台打开。默认自动执行“生成修订新版本 → 只读对照复核”，然后在侧栏显示已解决、部分解决和未解决项，以及修改证据。
+5. 由作者核验结果。仍有文字问题可以再授权一轮；每个闭环最多两轮，不无限自评。真实实验、作者决策和最终投稿不会自动执行。
+
+读取的是宿主中真实、已完成的助手正文，按请求标记、用户消息序号和回复轮次关联，不采集模型推理。
+修改与复核要求独立新稿路径、保留全部原意见及编号；结果格式不完整、遗漏问题或缺证据会停止。
+模型提供的修改证据仍须作者核验，插件尚未独立校验文件内容或执行确定性稿件差异审查。
+
+**费用与暂停**：整理意见一次模型任务；每次授权最多再发两次任务（修改、复核），不是固定 token 或费用上限。
+有草稿、无关新消息、失败或缺材料时不继续。收起工作台、刷新页面、关闭页面或切换工作区会撤销自动续行许可；
+返回后可查看完成结果，必要时点“继续只读复核”。“暂停后续自动执行”不取消已发送任务，取消当前任务请使用 DSH 停止按钮。
+
+每个工作区保存最近一个闭环（最多 7 条阶段记录），开始新闭环会替换当前记录；此前可 **导出本闭环记录** 备份。
+记录含审稿正文摘要、问题与证据，保存在 DSH 设置中，不会自动上传 GitHub。普通项目快照不包含闭环记录和续行许可。
+更多边界与操作说明见 [闭环使用指南](docs/REVIEW-LOOP.zh-CN.md)。
+
+材料完整度是文件路径/类型的覆盖率，**不是论文质量或录用概率**。SCI/EI 只是建议量表，不是所有刊会共同的标准；
+在“更多 → 具体投稿目标与作者指南”填写实际要求，在“流程”选择目标标准，再到“更多 → 更多工具”发起深度评分，仍需核验正文证据。
+
+默认的新手任务只填入对话框，手动发送后在主对话检查结果；不会新增工作台任务追踪记录。
+“流程 → 生成模块结果”或“更多工具”直接启动的任务才会进入“更多 → 最近任务”。输入框已有草稿时不会自动发送。
+切换场景或重复准备任务，会替换上一段未编辑的插件提示词，保留它前后的手动文字；已修改或无法识别的草稿需确认后才替换，不再自动追加。刷新页面后无法识别旧提示词，也会先询问。
+任务验收与研究阶段确认彼此独立，扫描不会替研究者确认阶段。
 
 ## 更新、停用与卸载
 
-更新前停止正在运行的 `dsh web`，然后执行：
+更新前等待任务结束并停止 `dsh web`：
 
 ```bash
 dsh plugin --profile web add github:masskx/dsh-research-loom --force
 dsh web
 ```
 
-暂时停用：到 **设置 → 插件 → 插件配置 → Academic Research Skills** 关闭开关。
-技能、命令和工作台会即时隐藏，项目设置保留。
-
-卸载：
+暂时停用：**设置 → 插件 → 插件配置 → Academic Research Skills** 关闭开关。工作台、技能和命令隐藏，配置保留。
+卸载后重启 DSH：
 
 ```bash
 dsh plugin --profile web remove dsh-academic-research-skills
 ```
 
-卸载后重启 DSH。详细步骤、旧版迁移、远程服务器和常见问题见 [安装指南](docs/INSTALL.zh-CN.md)。
+遇到入口不显示、旧版缓存或远程部署问题，见 [安装排错](docs/INSTALL.zh-CN.md)。
 
 ## 当前能力边界
 
-- 自动盘点使用 DSH 文件索引的候选路径，不读取正文；人工归类也不等于全文核验。
-- 默认过滤依赖、缓存和 JS/TS/YAML 配置文件。显式范围优先，支持手动纠正；单次最多保留 2,000 条候选路径，起步提示最多列出 60 条。
-- 工作台直接启动的任务保留最近 20 项。执行状态随当前打开的会话观察，离开期间可在返回后复核。
-- 产物回收检测新增路径，不检测原文件内容修改，也不能证明同期新增文件一定由该任务生成。纯对话结果请在对话中查看。
-- 项目记忆按工作区路径保存在 DSH 设置中；跨电脑迁移使用 JSON 导出/导入，不自动同步项目文件。快照不含论文正文和会话任务历史。
-- 联网检索、全文读取与生成质量取决于 DSH 模型和工具；本插件不附带独立 PDF/OCR 解析器或数据库订阅。
-- 上游部分确定性核验脚本、Claude Code hooks 没有移植到本包。多角色技能描述不代表宿主一定并行启动多个代理。
+- 自动盘点仅使用 DSH 文件索引的候选路径，最多保留 2,000 项；引导提示最多列出 60 项，不保证穷尽所有文件。可限定子目录并手动纠正归类。
+- 直接启动的任务保留最近 20 项，状态随打开的会话观察。新增路径只是候选产物，不检测原文件内容变化，不证明由某个任务产生。
+- 场景、步骤与项目记忆按工作区路径保存在 DSH 设置中。跨电脑请通过“更多工具 → 导出 / 导入项目记忆”迁移 JSON；不包含论文正文、会话任务历史或审稿闭环。审稿闭环单独导出只供备份查看，不导入执行许可。
+- 全文读取、联网检索与生成质量依赖宿主模型和工具。请勿上传无权共享的审稿意见、敏感数据或受限全文；按机构及刊会规范处理隐私与 AI 使用披露。
+- 上游部分核验脚本与 Claude Code hooks 未移植；多角色技能描述不代表宿主一定并行启动多个代理。
 
 ## 开发与验证
+
+仅二次开发者需要：
 
 ```bash
 git clone https://github.com/masskx/dsh-research-loom.git
@@ -148,58 +156,39 @@ cd dsh-research-loom
 npm install -g pnpm@10
 pnpm install --frozen-lockfile
 pnpm run verify
-
-# 将本地源码打包安装到 DSH Web profile
 pnpm run install:local -- --profile web
 dsh web
 ```
 
-提交前运行 `pnpm run verify`，并提交构建后的 `lib/client.js` 和 `lib/client.js.map`，
-保证 GitHub 安装者无需编译。`install:local` 使用带内容指纹的 tarball，适配 Windows 跨盘开发。
-
-验证覆盖材料纠正、流程确认、任务状态、产物差集、记忆迁移等 15 项测试。
-另有真实 DSH 界面检查和不调用模型的 [隔离浏览器验收流程](docs/QA.zh-CN.md)。
-这些检查不代表真实在线研究或学术评估质量已被系统测量。
-
-问题反馈请到 [Issues](https://github.com/masskx/dsh-research-loom/issues)，附操作系统、DSH/插件版本、
-复现步骤和经过脱敏的日志。后续开发顺序与验收目标见 [Roadmap](docs/ROADMAP.zh-CN.md)。
+提交时包含 `lib/client.js` 和 `lib/client.js.map`，保证普通用户无需编译。开发安装使用带内容指纹的 tarball。
+[验证说明](docs/QA.zh-CN.md)包含不调用模型的浏览器验收；测试通过不代表真实检索或学术评审质量已被系统测量。
+反馈请到 [Issues](https://github.com/masskx/dsh-research-loom/issues)，附版本和脱敏后的复现步骤。
 
 ## 来源与许可
 
-本项目基于 [nullptr-DZF/dsh-academic-research-skills](https://github.com/nullptr-DZF/dsh-academic-research-skills)
+基于 [nullptr-DZF/dsh-academic-research-skills](https://github.com/nullptr-DZF/dsh-academic-research-skills)
 二次开发；学术技能衍生自 Cheng-I Wu（[Imbad0202](https://github.com/Imbad0202)）的
 [Academic Research Skills](https://github.com/Imbad0202/academic-research-skills) v3.21.1。
+保留 4 个核心技能和 16 个 `/ars-*` 命令，并增加交互工作台、材料归类、任务回流、项目记忆与新手引导。
 
-保留 4 个核心技能与 16 个 `/ars-*` 命令，在此基础上增加交互工作台、材料纠正、任务回流和项目记忆。
-本仓库继续遵循 **CC-BY-NC-4.0**，要求署名并限制为非商业用途。这是公开源码项目，
-不属于 OSI 定义的开源许可。完整说明见 [NOTICE](NOTICE.md) 和 [LICENSE](LICENSE)。
+继续遵循 **CC-BY-NC-4.0**，要求署名且仅限非商业用途；这是公开源码项目，不属于 OSI 定义的开源许可。
+见 [NOTICE](NOTICE.md) 和 [LICENSE](LICENSE)。
 
 ## English
 
-**Research Loom** is an academic research workbench for DeepSeek Harness: start a
-project, organize sources, inspect missing materials, run stage-specific tasks,
-and carry research context into the next step. No slash-command memorization is required.
-
-Install Node.js 20+ (current LTS recommended) and Git, then run:
+Research Loom is a research workbench for **an existing DeepSeek Harness installation** (tested with DSH 0.1.1-rc.2).
+Stop the running Web server, install, then restart:
 
 ```bash
-npm install -g @deepseek-ai/dsh@0.1.1-rc.2
 dsh plugin --profile web add github:masskx/dsh-research-loom
 dsh web
 ```
 
-Open the URL printed by DSH, configure a working model, select your paper workspace,
-and open **Paper workbench**. Blank sessions show the launcher above the composer;
-existing conversations show it in the header. The collapsible right panel offers
-**Overview**, **Materials**, and **Workflow**. Screenshots above use synthetic demo data.
+No clone or build is needed. Select a paper workspace, configure a working model and open **Paper workbench**.
+The **Start** tab offers **I have a manuscript**, **Start from scratch**, and **Revise after peer review**.
+Each has three steps with required inputs and expected outputs. **Prepare task in chat** fills a draft only; review it and send in DSH.
+Switching steps never confirms research completion. Materials and the full workflow remain available in separate tabs.
 
-Version **0.7.0** is verified against DSH **0.1.1-rc.2**. The internal package name
-remains `dsh-academic-research-skills`; the settings card is **Academic Research Skills**.
-Use the GitHub source above, not an unrelated npm release. Model credentials and
-usage costs are managed by DSH. Network search and document reading require suitable host tools.
-
-Inventory is path-based, not evidence of reading or academic quality. Task tracking
-observes the open session and collects new candidate paths, not edits to existing files.
-Researcher confirmation is separate from material coverage. Portable memory uses
-explicit JSON export/import. This project retains upstream attribution and is
-licensed **CC-BY-NC-4.0**, for non-commercial use only.
+Document reading and web search require suitable host tools; credentials and costs belong to your DSH configuration.
+Inventory is path-based, not an academic quality assessment. The internal package/settings names remain
+`dsh-academic-research-skills` / **Academic Research Skills**. Licensed **CC-BY-NC-4.0**, non-commercial only.

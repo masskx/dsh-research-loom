@@ -38,7 +38,12 @@ const ctx = {
 };
 const inputActions = {
   setDraft: (draft) => composer.update({ draft }),
-  submit: () => { state.update({ running: true, blank: false, lastAgentError: null }); composer.update({ draft: '' }); },
+  submit: () => {
+    const current = state.getSnapshot();
+    const seq = Math.max(0, ...(current.nodes ?? []).map((node) => node.seq)) + 1;
+    state.update({ nodes: [...(current.nodes ?? []), { kind: 'user', seq, content: [{ type: 'text', text: composer.getSnapshot().draft }] }], running: true, blank: false, lastAgentError: null });
+    composer.update({ draft: '' });
+  },
 };
 apply(ctx);
 
@@ -51,6 +56,9 @@ function App() {
     <p>Only simulated DSH state. No research service is called.</p>
     <button onClick={() => { const s = state.getSnapshot(); sources[s.cwd].push('literature/research-gap.md'); state.update({ running: false, turnEnds: new Map([[1, 100]]) }); }}>模拟完成并产出文件</button>
     <button onClick={() => state.update({ running: false, lastAgentError: 'Fixture model unavailable' })}>模拟失败</button>
+    <button onClick={() => {
+      state.update({ nodes: [{ kind: 'assistant', seq: 2, turn: 1, messageId: 'seed-review', blocks: [{ kind: 'text', text: 'R1.1 引言未说明贡献，请明确研究问题。R1.2 缺少外部验证，请补做实验。' }] }], turnEnds: new Map([[1, 3]]), running: false });
+    }}>载入模拟审稿回复</button>
     <button onClick={() => { state.update({ sessionId: 'fixture-b', cwd: '/fixture/second', running: false, blank: true, turnEnds: new Map() }); composer.update({ draft: '' }); }}>切换第二项目</button>
     <button onClick={() => { state.update({ sessionId: 'fixture-a', cwd: '/fixture/blank', running: false, blank: false, turnEnds: new Map([[1, 100]]) }); composer.update({ draft: '' }); }}>返回第一项目</button>
     <textarea aria-label="模拟对话框" value={input.draft} onChange={(e) => composer.update({ draft: e.target.value })} style={{ display: 'block', width: '90%', minHeight: 250, marginTop: 20 }} />
@@ -63,5 +71,18 @@ window.fixture = {
   setFailSave: (value) => { failSave = value; },
   setFailScan: (value) => { failScan = value; },
   setWritable: (value) => settings.update({ writable: value }),
+  completeReview: (options = {}) => {
+    const current = state.getSnapshot();
+    const loop = JSON.parse(settings.getSnapshot().value.projects[current.cwd].reviewLoop);
+    const seq = Math.max(0, ...current.nodes.map((node) => node.seq)) + 1;
+    const turn = Math.max(0, ...current.turnEnds.keys()) + 1;
+    const result = { version: 1, phase: loop.phase, outcome: 'ready', summary: '模拟结果，不是真实学术结论', manuscript: 'paper/main.md', revised: loop.phase === 'plan' ? '' : `paper/revised-${loop.round}.md`, issues: [
+      { id: 'R1.1', comment: '引言未说明贡献', kind: 'text', priority: 'high', status: loop.phase === 'plan' || options.unresolved ? 'open' : 'resolved', location: '引言第 3 段', action: '明确研究问题', evidence: loop.phase === 'plan' ? '' : '修订稿引言第 3 段说明研究问题' },
+      { id: 'R1.2', comment: '缺少外部验证', kind: 'experiment', priority: 'high', status: 'open', location: '结果', action: '作者需补实验', evidence: '' },
+    ], blockers: [], ...options.result };
+    const raw = options.malformed ? 'No structured output' : '```research-loom-result\n' + JSON.stringify(result) + '\n```';
+    state.update({ running: false, nodes: [...current.nodes, { kind: 'assistant', seq, turn, messageId: `reply-${seq}`, blocks: [{ kind: 'text', text: raw }], ...(options.interrupted ? { interrupted: true } : {}) }], turnEnds: new Map([...current.turnEnds, [turn, seq + 1]]) });
+  },
+  addUnrelatedMessage: () => { const current = state.getSnapshot(); state.update({ nodes: [...current.nodes, { kind: 'user', seq: Math.max(...current.nodes.map((node) => node.seq)) + 1, content: [{ type: 'text', text: 'different task' }] }] }); },
 };
 createRoot(document.getElementById('root')).render(<App />);

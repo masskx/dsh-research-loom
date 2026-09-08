@@ -49,9 +49,10 @@ test('workspace settings persist independently and normalize new configuration',
 
 test('invalid persisted values use safe defaults', () => {
   assert.deepEqual(normalizeProjectState({ stage: 'unknown', workflowMode: 'x', standard: 'predatory', workflow: ['bad'] }), {
+    entryScenario: '', entryStep: 0,
     stage: 'topic', updatedAt: '', source: 'manual', lastScannedAt: '', workflowMode: 'auto', workflow: [], standard: 'general',
     kickoffMode: 'auto', researchTopic: '', researchBrief: '', searchWindow: 'recent5',
-    researchMemory: '', venue: '', venueGuidelines: '', scanRoot: '', excludedFolders: [], assignments: {}, stageStates: {}, tasks: [],
+    researchMemory: '', reviewLoop: '', venue: '', venueGuidelines: '', scanRoot: '', excludedFolders: [], assignments: {}, stageStates: {}, tasks: [],
   });
   assert.throws(() => updateProjectStage({}, '/paper', 'unknown', ''), /Unknown paper stage/);
 });

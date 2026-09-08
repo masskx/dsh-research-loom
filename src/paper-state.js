@@ -130,6 +130,8 @@ function normalizeWorkflow(value) {
 
 export function normalizeProjectState(value) {
   return {
+    entryScenario: ['paper', 'start', 'revision'].includes(value?.entryScenario) ? value.entryScenario : '',
+    entryStep: Number.isInteger(value?.entryStep) && value.entryStep >= 0 && value.entryStep <= 2 ? value.entryStep : 0,
     stage: STAGE_IDS.has(value?.stage) ? value.stage : 'topic',
     updatedAt: typeof value?.updatedAt === 'string' ? value.updatedAt : '',
     source: value?.source === 'auto' || value?.source === 'manual' ? value.source : 'manual',
@@ -142,6 +144,7 @@ export function normalizeProjectState(value) {
     researchBrief: typeof value?.researchBrief === 'string' ? value.researchBrief.slice(0, 2000) : '',
     searchWindow: Object.hasOwn(SEARCH_WINDOWS, value?.searchWindow) ? value.searchWindow : 'recent5',
     researchMemory: typeof value?.researchMemory === 'string' ? value.researchMemory.slice(0, 8000) : '',
+    reviewLoop: typeof value?.reviewLoop === 'string' && value.reviewLoop.length <= 800000 ? value.reviewLoop : '',
     venue: typeof value?.venue === 'string' ? value.venue.slice(0, 500) : '',
     venueGuidelines: typeof value?.venueGuidelines === 'string' ? value.venueGuidelines.slice(0, 2000) : '',
     scanRoot: normalizeRelativeRoot(value?.scanRoot),
@@ -283,12 +286,12 @@ export function taskExecutionStatus(task, { running, endSeq = 0, promptFailed = 
 }
 
 export function exportProjectSnapshot(project) {
-  return { format: 'research-loom-project', version: 1, project: { ...normalizeProjectState(project), tasks: [] } };
+  return { format: 'research-loom-project', version: 1, project: { ...normalizeProjectState(project), tasks: [], reviewLoop: '' } };
 }
 
 export function importProjectSnapshot(value) {
   if (value?.format !== 'research-loom-project' || value.version !== 1 || !value.project || typeof value.project !== 'object' || Array.isArray(value.project)) throw new Error('Invalid project snapshot');
-  return normalizeProjectState({ ...value.project, tasks: [] });
+  return normalizeProjectState({ ...value.project, tasks: [], reviewLoop: '' });
 }
 
 export function currentStageForWorkflow(report, workflow) {

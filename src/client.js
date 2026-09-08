@@ -25,6 +25,10 @@ import {
   taskExecutionStatus,
 } from './paper-state.js';
 import { OverviewPanel, MaterialsPanel, StageControl, ProjectTransfer, STAGE_LABELS } from './workbench-panels.js';
+import { GettingStartedPanel, GUIDE_STYLES } from './getting-started-panel.js';
+import { prepareComposerDraft } from './composer-draft.js';
+import { ReviewLoopPanel } from './review-loop-panel.js';
+import { normalizeReviewLoop } from './review-loop.js';
 
 export const inject = ['slots', 'settingsScope', 'remote', 'remote.fileReferences', 'layout'];
 
@@ -128,6 +132,8 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
   const [open, setOpen] = React.useState(false);
   const [sending, setSending] = React.useState(false);
   const [actionMessage, setActionMessage] = React.useState('');
+  const [pendingDraft, setPendingDraft] = React.useState(null);
+  const ownedDraft = React.useRef(null);
   const submitLock = React.useRef(false);
   const panelElement = React.useRef(null);
   const taskWrites = React.useRef(new Set());
@@ -141,6 +147,14 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
   const liveInput = React.useRef(null);
   liveInput.current = { cwd, sessionId, input, enabled, running };
   React.useEffect(() => { if (panelElement.current) panelElement.current.scrollTop = 0; }, [view]);
+  React.useEffect(() => {
+    ownedDraft.current = null;
+    setPendingDraft(null);
+  }, [cwd, sessionId]);
+  React.useEffect(() => {
+    if (!input?.draft?.trim() || running) ownedDraft.current = null;
+  }, [input?.draft, running]);
+  React.useEffect(() => setPendingDraft(null), [snapshot.value?.projects?.[normalizeWorkspaceKey(cwd)]?.entryScenario, snapshot.value?.projects?.[normalizeWorkspaceKey(cwd)]?.entryStep]);
 
   function releaseLayout() {
     const reservation = layoutReservation.current;
@@ -299,15 +313,26 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
       let live = liveInput.current;
       if (live.cwd !== cwd || live.sessionId !== sessionId || !live.enabled || live.running) return;
       const latestProject = normalizeProjectState(scope.getSnapshot().value?.projects?.[key]);
-      const composed = `${prompt}\n\n${projectHandoff(latestProject, language)}`;
-      if (live.input?.draft?.trim()) {
-        inputActions.setDraft(`${live.input.draft}\n\n${composed}`);
-        setActionMessage(language === 'zh' ? '已追加到已有草稿，请在对话框检查后发送。' : 'Appended to your draft; review and send from the composer.');
-        return;
+      if (direct && ['awaiting', 'running'].includes(normalizeReviewLoop(latestProject.reviewLoop)?.status)) {
+        setActionMessage(language === 'zh' ? '审稿闭环正在等待结果，请先完成或结束等待。' : 'The review loop is awaiting a result; finish or end its wait first.'); return false;
       }
-      if (!direct) { inputActions.setDraft(composed); setActionMessage(language === 'zh' ? '已填入对话框，可编辑后发送。' : 'Draft prepared; edit and send when ready.'); return; }
+      const composed = `${prompt}\n\n${projectHandoff(latestProject, language)}`;
+      setPendingDraft(null);
+      if (!direct || live.input?.draft?.trim()) {
+        const currentDraft = live.input?.draft ?? '';
+        const owned = ownedDraft.current;
+        const prepared = prepareComposerDraft(currentDraft, composed, owned?.cwd === cwd && owned?.sessionId === sessionId ? owned.text : '');
+        if (prepared.kind === 'confirm') {
+          setPendingDraft({ text: composed, baseline: currentDraft, cwd, sessionId });
+          return false;
+        }
+        inputActions.setDraft(prepared.draft);
+        ownedDraft.current = { cwd, sessionId, text: composed };
+        setActionMessage(language === 'zh' ? (prepared.kind === 'replace' ? '已替换上一次插件任务，其他文字保留，请检查后发送。' : '已填入对话框，可编辑后发送。') : (prepared.kind === 'replace' ? 'Previous plugin task replaced; other text preserved. Review and send.' : 'Draft prepared; edit and send when ready.'));
+        return true;
+      }
       if (project.tasks.some((task) => task.sessionId === sessionId && ['awaiting', 'running', 'checking'].includes(task.status))) {
-        setActionMessage(language === 'zh' ? '上一个任务尚未结束，请在概览中检查执行状态和产物。' : 'Check the previous task in Overview before starting another.'); return;
+        setActionMessage(language === 'zh' ? '上一个任务尚未结束，请在“更多 → 最近任务”中检查执行状态和产物。' : 'Check the previous task in More → Recent tasks before starting another.'); return;
       }
       if (scan.status !== 'ready') { setActionMessage(language === 'zh' ? '请等待材料扫描完成后再启动任务。' : 'Wait for the material scan before starting.'); return; }
       const task = { id: crypto.randomUUID(), sessionId, stageId, status: 'awaiting', startedAt: new Date().toISOString(), endSeq, baseline: report.sourceFiles, outputs: [] };
@@ -317,7 +342,7 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
       if (live.cwd !== cwd || live.sessionId !== sessionId || !live.enabled || live.running || live.input?.draft?.trim()) throw new Error('Input changed during submission');
       inputActions.setDraft(`${composed}\n\n[Research Loom task ${task.id}]`);
       inputActions.submit();
-      setActionMessage(language === 'zh' ? '已请求启动，执行状态见概览。' : 'Start requested; follow status in Overview.');
+      setActionMessage(language === 'zh' ? '已请求启动，执行状态见“更多 → 最近任务”。' : 'Start requested; follow status in More → Recent tasks.');
     } catch {
       setActionMessage(strings.sendError);
       if (submittedTaskId) await saveConfig((latest) => ({ tasks: latest.tasks.map((task) => task.id === submittedTaskId ? { ...task, status: 'failed' } : task) }));
@@ -327,6 +352,19 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
     }
   };
   const modulePrompt = () => buildModulePrompt(selected.id, { language, cwd, moduleReport: selectedReport, standardId: project.standard, userPrompt: promptValue });
+  const confirmDraftReplacement = () => {
+    const live = liveInput.current;
+    if (!pendingDraft || !inputActions || live.running || !live.enabled || (live.input?.phase && live.input.phase !== 'plain')) return;
+    if (live.cwd !== pendingDraft.cwd || live.sessionId !== pendingDraft.sessionId || live.input?.draft !== pendingDraft.baseline) {
+      setPendingDraft(null);
+      setActionMessage(language === 'zh' ? '对话草稿已变化，未覆盖。请重新准备任务。' : 'The draft changed; nothing was overwritten. Prepare the task again.');
+      return;
+    }
+    inputActions.setDraft(pendingDraft.text);
+    ownedDraft.current = { cwd, sessionId, text: pendingDraft.text };
+    setPendingDraft(null);
+    setActionMessage(language === 'zh' ? '已替换当前草稿，请检查后发送。' : 'Current draft replaced. Review and send.');
+  };
   const scanLabel = scan.status === 'idle' || scan.status === 'scanning' ? strings.scanning : scan.status === 'error' ? strings.scanError : `${strings.scanDone} · ${report.candidateCount} ${strings.candidates}${scan.incomplete ? (language === 'zh' ? ' · 部分查询失败，清单可能不完整' : ' · Partial scan') : ''}`;
   const confirmedCount = workflowIds.filter((id) => project.stageStates[id] === 'confirmed').length;
   const standard = PUBLICATION_STANDARDS[project.standard];
@@ -356,16 +394,9 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
         padding: '5px 9px 5px 6px', cursor: 'pointer', alignSelf: heroOnly ? 'center' : undefined,
       },
     },
-    React.createElement('span', {
-      style: {
-        display: 'grid', placeItems: 'center', width: 26, height: 26,
-        borderRadius: '50%', background: `conic-gradient(${colors.brand} ${score.score}%, ${colors.border} 0)`,
-        color: colors.primary, fontSize: 9, fontWeight: 750,
-      },
-    }, React.createElement('span', { style: { display: 'grid', placeItems: 'center', width: 20, height: 20, borderRadius: '50%', background: colors.background } }, `${score.score}%`)),
     React.createElement('span', { style: { display: 'grid', minWidth: 0, textAlign: 'left' } },
       React.createElement('strong', { style: { fontSize: 11 } }, strings.workbench),
-      React.createElement('span', { style: { color: colors.secondary, fontSize: 9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, `${current[language]} · ${scanLabel}`)));
+      React.createElement('span', { title: scanLabel, style: { color: colors.secondary, fontSize: 10, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, language === 'zh' ? '查看任务与论文材料' : 'Tasks and paper materials')));
   }
 
   return React.createElement('section', {
@@ -375,23 +406,24 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
     style: {
       boxSizing: 'border-box', position: 'fixed', zIndex: 35,
       top: 0, right: 0, bottom: 0, width: 'min(340px, 100vw)',
-      padding: '14px', overflowY: 'auto', overscrollBehavior: 'contain',
+      padding: '20px', overflowY: 'auto', overscrollBehavior: 'contain',
       border: 0, borderLeft: `1px solid ${colors.border}`, borderRadius: 0,
       background: colors.background, color: colors.primary,
-      boxShadow: '0 12px 38px rgba(25,35,60,.18)', display: 'grid',
+      boxShadow: 'none', display: 'grid',
       alignContent: 'start', gap: 14, fontSize: 13, lineHeight: 1.55,
     },
   },
   React.createElement('style', null, '.research-workbench :is(button,select,textarea,input,span,small,label,summary,code,li){font-size:13px!important}.research-workbench strong{font-size:14px!important}.research-workbench :is(button,input,select,textarea):focus-visible{outline:2px solid #4d6bfe;outline-offset:2px}.research-workbench button:disabled{cursor:not-allowed;opacity:.55}'),
+  React.createElement('style', null, GUIDE_STYLES),
   React.createElement('header', { style: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 10, alignItems: 'start' } },
     React.createElement('div', { style: { minWidth: 0 } },
       React.createElement('div', { style: { display: 'flex', gap: 7, alignItems: 'center' } },
         React.createElement('strong', { style: { fontSize: 14 } }, strings.workbench),
-        React.createElement('span', { style: { color: colors.brand, background: 'rgba(77,107,254,.10)', padding: '2px 7px', borderRadius: 999, fontSize: 10, fontWeight: 650 } }, `${strings.autoStage} · ${current[language]}`)),
+        view === 'flow' ? React.createElement('span', { style: { color: colors.brand, background: 'rgba(77,107,254,.10)', padding: '2px 7px', borderRadius: 999, fontSize: 10, fontWeight: 650 } }, `${strings.autoStage} · ${current[language]}`) : null),
       React.createElement('div', { title: cwd, style: { marginTop: 3, color: colors.secondary, fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, workspaceName(cwd)),
-      React.createElement('div', { role: scan.status === 'error' ? 'alert' : 'status', title: scan.error || undefined, style: { marginTop: 4, color: scan.status === 'error' ? colors.danger : colors.dimmed, fontSize: 10 } }, scanLabel)),
+      scan.status !== 'ready' || view !== 'overview' || scan.incomplete ? React.createElement('div', { role: scan.status === 'error' ? 'alert' : 'status', title: scan.error || undefined, style: { marginTop: 4, color: scan.status === 'error' ? colors.danger : colors.dimmed, fontSize: 12 } }, scanLabel) : null),
     smallButton('×', { 'aria-label': strings.closeWorkbench, title: strings.closeWorkbench, onClick: closePanel, style: { width: 30, height: 30, padding: 0, borderRadius: '50%', fontSize: 18, lineHeight: 1 } }),
-    React.createElement('div', { style: { gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) auto', gap: 8, alignItems: 'end' } },
+    view === 'flow' ? React.createElement('div', { style: { gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) auto', gap: 8, alignItems: 'end' } },
       React.createElement('label', { style: { display: 'grid', gap: 3, color: colors.secondary, fontSize: 10 } }, strings.workflow,
         React.createElement('select', { 'aria-label': strings.workflow, value: project.workflowMode, onChange: (event) => { const mode = event.target.value; void saveConfig({ workflowMode: mode, ...(mode === 'custom' && !project.workflow.length ? { workflow: workflowIds } : {}) }); }, style: { minWidth: 0, border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.background, color: colors.primary, padding: '6px 7px', fontSize: 10 } },
           Object.entries(WORKFLOW_PRESETS).map(([id, preset]) => React.createElement('option', { key: id, value: id }, preset[language])))),
@@ -399,20 +431,30 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
         React.createElement('select', { 'aria-label': strings.standard, value: project.standard, onChange: (event) => { void saveConfig({ standard: event.target.value }); }, style: { minWidth: 0, border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.background, color: colors.primary, padding: '6px 7px', fontSize: 10 } },
           Object.entries(PUBLICATION_STANDARDS).map(([id, item]) => React.createElement('option', { key: id, value: id }, item[language])))),
       React.createElement('div', { 'data-testid': 'material-score', title: strings.scoreNote, style: { width: 54, height: 54, borderRadius: '50%', background: `conic-gradient(${colors.brand} ${score.score}%, ${colors.border} 0)`, display: 'grid', placeItems: 'center' } },
-        React.createElement('div', { style: { width: 44, height: 44, borderRadius: '50%', background: colors.background, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 750 } }, `${score.score}%`)))),
-  React.createElement('nav', { 'aria-label': language === 'zh' ? '工作台视图' : 'Workbench views', style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, position: 'sticky', top: -14, padding: '10px 0', zIndex: 2, background: colors.background } },
-    [['overview', '概览', 'Overview'], ['materials', '材料', 'Materials'], ['flow', '流程', 'Workflow']].map(([id, zh, en]) => smallButton(language === 'zh' ? zh : en, { key: id, 'aria-pressed': view === id, onClick: () => setView(id) }, view === id))),
-  actionMessage ? React.createElement('div', { role: 'status', style: { padding: 10, background: colors.surface, borderRadius: 8 } }, actionMessage) : null,
+        React.createElement('div', { style: { width: 44, height: 44, borderRadius: '50%', background: colors.background, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 750 } }, `${score.score}%`))) : null),
+  React.createElement('nav', { 'aria-label': language === 'zh' ? '工作台视图' : 'Workbench views', style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, position: 'sticky', top: -20, padding: '8px 0 0', borderBottom: `1px solid ${colors.border}`, zIndex: 2, background: colors.background } },
+    [['overview', '开始', 'Start'], ['materials', '材料', 'Materials'], ['flow', '流程', 'Workflow'], ['tools', '更多', 'More']].map(([id, zh, en]) => smallButton(language === 'zh' ? zh : en, { key: id, 'aria-pressed': view === id, onClick: () => { setView(id); setActionMessage(''); }, style: { border: 0, borderBottom: `2px solid ${view === id ? colors.brand : 'transparent'}`, borderRadius: 0, padding: '8px 0 12px', background: 'transparent', color: view === id ? colors.primary : colors.secondary, fontWeight: view === id ? 600 : 400 } }))),
+  actionMessage && !(view === 'overview' && /^(已填入对话框|已追加到已有草稿|Draft prepared|Appended to your draft)/.test(actionMessage)) ? React.createElement('div', { role: 'status', style: { padding: 10, background: colors.surface, borderRadius: 8 } }, actionMessage) : null,
+  pendingDraft ? React.createElement('section', { 'aria-label': language === 'zh' ? '确认替换草稿' : 'Confirm draft replacement', style: { display: 'grid', gap: 10, padding: 12, border: `1px solid ${colors.border}`, borderRadius: 8 } },
+    React.createElement('span', null, language === 'zh' ? '对话框已有文字，或你已编辑过上次任务。是否用新任务替换整份草稿？替换会移除其中的手动修改，不会自动发送。' : 'The composer contains existing or edited text. Replace the entire draft with this task? Manual edits will be removed; nothing will be sent.'),
+    smallButton(language === 'zh' ? '替换当前草稿' : 'Replace current draft', { disabled: running || sending, onClick: confirmDraftReplacement }),
+    smallButton(language === 'zh' ? '保留原草稿，取消' : 'Keep draft and cancel', { onClick: () => setPendingDraft(null) })) : null,
   running ? React.createElement('div', { role: 'status' }, language === 'zh' ? '当前对话正在执行，完成后会检查新增材料。' : 'Conversation running; new materials will be checked afterward.') : null,
+  view === 'overview' ? React.createElement(GettingStartedPanel, { key: `guide-${cwd}`, project, report, saveConfig, submitPrompt, language, cwd, disabled: sending || running || !inputActions || scan.status !== 'ready', writable: snapshot.writable, onMaterials: () => setView('materials') }) : null,
+  React.createElement('div', { hidden: view !== 'overview' }, React.createElement(ReviewLoopPanel, { key: `loop-${cwd}-${sessionId}`, project, conversation, input, inputActions, cwd, sessionId, saveConfig, writable: snapshot.writable, enabled })),
+  view === 'tools' ? React.createElement(OverviewPanel, { key: `overview-${cwd}`, project, report, workflow: workflowIds, nextStage: currentStageId, saveConfig, checkResults, language, onStage: (id) => chooseStage(PAPER_STAGES.find((s) => s.id === id)) }) : null,
   view === 'materials' ? React.createElement(MaterialsPanel, { key: cwd, project, report, saveConfig, language, rescan: () => setScanNonce((n) => n + 1), scanning: scan.status === 'scanning', fillFile: (path) => { void submitPrompt(language === 'zh' ? `请读取工作区文件 ${JSON.stringify(path)}，核验题名、作者、年份、主要结论及证据页码。明确标注全文、摘要或不可读状态，不得编造读取结果。` : `Read workspace file ${JSON.stringify(path)}; verify metadata, findings and page evidence. State whether full text, abstract only, or unreadable.`, false); } }) : null,
-  view === 'overview' ? React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+  view === 'tools' ? React.createElement('details', { 'data-testid': 'advanced-tools', style: { borderTop: `1px solid ${colors.border}`, paddingTop: 10 } },
+  React.createElement('summary', { style: { cursor: 'pointer', color: colors.secondary } }, language === 'zh' ? '更多工具：评分、检索与迁移' : 'More tools: assessment, search and migration'),
+  React.createElement('div', { style: { display: 'grid', gap: 14, marginTop: 14 } },
+  React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
     React.createElement('span', { style: { fontSize: 11, fontWeight: 650 } }, strings.materialScore),
     React.createElement('span', { style: { color: colors.success, fontSize: 10 } }, `${strings.found} ${score.found}`),
     React.createElement('span', { style: { color: colors.danger, fontSize: 10 } }, `${strings.missing} ${score.missing}`),
     React.createElement('span', { style: { color: colors.dimmed, fontSize: 10 } }, strings.scoreNote),
     React.createElement('span', { style: { flex: 1 } }),
-    smallButton(strings.deepScore, { 'data-testid': 'deep-score', disabled: sending || running, onClick: () => { void submitPrompt(buildEvaluationPrompt(report, workflowIds, project.standard, language, cwd), true); } }, true)) : null,
-  view === 'overview' ? React.createElement('details', {
+    smallButton(strings.deepScore, { 'data-testid': 'deep-score', disabled: sending || running, onClick: () => { void submitPrompt(buildEvaluationPrompt(report, workflowIds, project.standard, language, cwd), true); } }, true)),
+  view === 'tools' ? React.createElement('details', {
     'data-testid': 'research-kickoff',
     open: kickoffExpanded,
     onToggle: (event) => {
@@ -463,8 +505,8 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
       smallButton(strings.kickoffFill, { disabled: !inputActions || running, onClick: () => { void submitPrompt(kickoffPrompt(), false, 'topic'); } }),
       smallButton(sending ? strings.generating : strings.kickoffRun, { disabled: sending || running || !inputActions, onClick: () => { void submitPrompt(kickoffPrompt(), true, 'topic'); } }, true))),
   ) : null,
-  view === 'overview' ? React.createElement(OverviewPanel, { key: cwd, project, report, workflow: workflowIds, nextStage: currentStageId, saveConfig, checkResults, language, onStage: (id) => chooseStage(PAPER_STAGES.find((s) => s.id === id)) }) : null,
-  view === 'overview' ? React.createElement(ProjectTransfer, { key: `transfer-${cwd}`, project, saveConfig, language }) : null,
+  view === 'tools' ? React.createElement(ProjectTransfer, { key: `transfer-${cwd}`, project, saveConfig, language }) : null,
+  )) : null,
   view === 'flow' ? React.createElement(React.Fragment, null,
   React.createElement('ol', { style: { listStyle: 'none', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, padding: 0, margin: 0 } },
     stages.map((stage, index) => {

@@ -1,6 +1,6 @@
 {
   "name": "dsh-academic-research-skills",
-  "version": "0.7.0",
+  "version": "0.9.0",
   "description": "Research Loom: an academic research workbench for DeepSeek Harness, with material classification, research kickoff, workflow tracking and project memory. Derived from Academic Research Skills (CC-BY-NC-4.0).",
   "type": "module",
   "main": "lib/startup.js",
