@@ -1,6 +1,5 @@
 import * as React from 'react';
 import {
-  ARTIFACT_SCAN_QUERIES,
   PAPER_STAGES,
   PUBLICATION_STANDARDS,
   SEARCH_WINDOWS,
@@ -29,8 +28,9 @@ import { GettingStartedPanel, GUIDE_STYLES } from './getting-started-panel.js';
 import { prepareComposerDraft } from './composer-draft.js';
 import { ReviewLoopPanel } from './review-loop-panel.js';
 import { normalizeReviewLoop } from './review-loop.js';
+import { scanRemote } from '../lib/material-scan-contract.js';
 
-export const inject = ['slots', 'settingsScope', 'remote', 'remote.fileReferences', 'layout'];
+export const inject = ['slots', 'settingsScope', 'remote', 'layout'];
 
 const SETTINGS_NAMESPACE = 'academic-research';
 let settingsWrites = Promise.resolve();
@@ -212,16 +212,10 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
     setScan((previous) => ({ status: 'scanning', report: previous.report, error: '' }));
     const run = async () => {
       try {
-        if (!ctx.remote?.fileReferences?.list) throw new Error('file reference service unavailable');
-        const settled = await Promise.allSettled(ARTIFACT_SCAN_QUERIES.map(async (query) => {
-          const result = await ctx.remote.fileReferences.list(sessionId, query, controller.signal);
-          if (!result?.ok) throw new Error(result?.error?.message ?? `scan failed for ${query}`);
-          return result.value;
-        }));
+        const result = await ctx.remote.researchLoom.scan(sessionId, controller.signal);
         if (!live) return;
-        const successful = settled.filter((item) => item.status === 'fulfilled');
-        if (!successful.length) throw new Error('all artifact queries failed');
-        const candidates = successful.flatMap((item) => item.value).filter((candidate) => candidate?.kind === 'file');
+        if (!result?.ok) throw new Error(result?.error?.message ?? 'Material scan failed');
+        const candidates = result.value.files;
         const scannedAt = new Date().toISOString();
         const report = analyzePaperArtifacts(candidates, scannedAt);
         const latest = scope.getSnapshot();
@@ -229,7 +223,7 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
         const configuredReport = analyzePaperArtifacts(candidates, scannedAt, latestProject);
         const inferredStage = nextResearchStage(configuredReport, resolveWorkflow(latestProject, configuredReport), latestProject);
         report.stage = inferredStage;
-        setScan({ status: 'ready', report, cwd, error: '', incomplete: successful.length < settled.length });
+        setScan({ status: 'ready', report, cwd, error: '', incomplete: result.value.incomplete });
         if (!kickoffExpansionTouched.current) setKickoffExpanded(isResearchKickoffRecommended(configuredReport));
         if (!selectionTouched.current) setSelectedStage(inferredStage);
       } catch (error) {
@@ -365,7 +359,7 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
     setPendingDraft(null);
     setActionMessage(language === 'zh' ? '已替换当前草稿，请检查后发送。' : 'Current draft replaced. Review and send.');
   };
-  const scanLabel = scan.status === 'idle' || scan.status === 'scanning' ? strings.scanning : scan.status === 'error' ? strings.scanError : `${strings.scanDone} · ${report.candidateCount} ${strings.candidates}${scan.incomplete ? (language === 'zh' ? ' · 部分查询失败，清单可能不完整' : ' · Partial scan') : ''}`;
+  const scanLabel = scan.status === 'idle' || scan.status === 'scanning' ? strings.scanning : scan.status === 'error' ? strings.scanError : `${strings.scanDone} · ${report.candidateCount} ${strings.candidates}${scan.incomplete ? (language === 'zh' ? ' · 清单不完整（扫描上限、链接或目录不可读）' : ' · Incomplete (scan limit, links, or unreadable directories)') : ''}`;
   const confirmedCount = workflowIds.filter((id) => project.stageStates[id] === 'confirmed').length;
   const standard = PUBLICATION_STANDARDS[project.standard];
   const kickoffMode = kickoffDraft.mode === 'auto' ? (report.candidateCount ? 'local' : 'web') : kickoffDraft.mode;
@@ -579,7 +573,13 @@ function AcademicResearchCard({ scope, refreshCatalog }) {
     !snapshot.writable ? React.createElement('p', { role: 'status', style: { margin: 0, color: colors.secondary, fontSize: 11 } }, strings.readOnly) : null);
 }
 
-export function apply(ctx) {
+export async function apply(ctx) {
+  const disposeRemote = await ctx.remote.$mount(scanRemote);
+  ctx.inject(['remote.researchLoom'], registerWorkbench);
+  return disposeRemote;
+}
+
+function registerWorkbench(ctx) {
   const scope = ctx.settingsScope.bind({ namespace: SETTINGS_NAMESPACE });
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({ name: 'settings.plugin.item', key: SETTINGS_NAMESPACE }, () => React.createElement(AcademicResearchCard, { scope, refreshCatalog: () => ctx.emit('connection/reset') })));
   ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({

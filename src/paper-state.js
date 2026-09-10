@@ -66,13 +66,6 @@ export const STAGE_MATERIALS = Object.freeze({
   ],
 });
 
-export const ARTIFACT_SCAN_QUERIES = Object.freeze([
-  'proposal', '开题', '研究问题', '文献', '.bib', '.ris', '.enl', '.docx', 'literature', 'method', 'protocol',
-  'sample', '伦理', 'data', '数据', '.csv', '.xlsx', 'result', '结果', 'figure',
-  'draft', '.tex', '.pdf', 'revision', '修订', 'submission', '投稿', 'review',
-  '审稿', 'decision', 'accepted', '录用', 'doi', '.md', '.txt', '.ipynb', '.py', '.r',
-]);
-
 const IDS = PAPER_STAGES.map((stage) => stage.id);
 const STAGE_IDS = new Set(IDS);
 const REQUIRED_WORKFLOW = ['topic', 'literature', 'design', 'draft', 'submission', 'review', 'archive'];

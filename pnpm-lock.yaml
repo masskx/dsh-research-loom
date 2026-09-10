@@ -29,6 +29,9 @@ importers:
       react:
         specifier: ^18.2.0
         version: 18.3.1
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
     devDependencies:
       esbuild:
         specifier: ^0.25.9

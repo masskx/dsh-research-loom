@@ -28,12 +28,13 @@ const scope = {
   },
 };
 const ctx = {
+  inject: (_dependencies, setup) => setup(ctx),
   settingsScope: { bind: () => scope },
   slots: { inject: (_name, setup) => setup(), register: (descriptor, render) => { registrations[descriptor.name] = render; } },
   layout: { openDetails() {}, closeDetails() {}, toggleSidebar() {} }, emit() {},
-  remote: { fileReferences: { list: async () => {
+  remote: { $mount: async () => () => {}, researchLoom: { scan: async () => {
     if (failScan) return { ok: false, error: { message: 'Fixture: offline' } };
-    return { ok: true, value: sources[state.getSnapshot().cwd].map((path) => ({ kind: 'file', path })) };
+    return { ok: true, value: { files: sources[state.getSnapshot().cwd].map((path) => ({ kind: 'file', path })), incomplete: false, warnings: [] } };
   } } },
 };
 const inputActions = {
@@ -45,7 +46,7 @@ const inputActions = {
     composer.update({ draft: '' });
   },
 };
-apply(ctx);
+const ready = apply(ctx);
 
 function App() {
   const session = state.use((s) => s);
@@ -85,4 +86,4 @@ window.fixture = {
   },
   addUnrelatedMessage: () => { const current = state.getSnapshot(); state.update({ nodes: [...current.nodes, { kind: 'user', seq: Math.max(...current.nodes.map((node) => node.seq)) + 1, content: [{ type: 'text', text: 'different task' }] }] }); },
 };
-createRoot(document.getElementById('root')).render(<App />);
+void ready.then(() => createRoot(document.getElementById('root')).render(<App />));

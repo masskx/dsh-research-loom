@@ -8,6 +8,8 @@ function harness(initialEnabled = true) {
   const effects = [];
   let current = { enabled: initialEnabled, projects: {} };
   const ctx = {
+    provide(name, value) { ctx[name] = value; },
+    typert: { register: () => () => {} },
     skills: {
       register(skill) {
         assert(!active.has(skill.name), `duplicate skill ${skill.name}`);

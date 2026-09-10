@@ -14,4 +14,4 @@
       # Use the package root so DSH's client-module scanner can discover the
       # package-level dsh.client declaration as well as the Host default export.
       name: 'dsh-academic-research-skills'
-      inject: [skills, settings]
+      inject: [skills, settings, typert]
