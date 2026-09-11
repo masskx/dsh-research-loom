@@ -45,3 +45,35 @@ test('source preparation supports explicit local, web and hybrid modes', () => {
     assert.equal(prompt.includes('seed.pdf'), kickoffMode !== 'web');
   }
 });
+
+test('code-heavy handoffs retain manuscript, reviews and references in the bounded entry prompt', () => {
+  const sources = [...Array.from({ length: 90 }, (_, i) => `code/file-${i}.py`),
+    'paper/main.tex', 'paper/refs.bib', 'reviews/reviewer-comments.md', 'reviews/old/reviewer-comments.md'];
+  const options = { excludedFolders: ['reviews/old'], assignments: { 'paper/main.tex': 'draft:source' } };
+  const report = analyzePaperArtifacts(sources, '', options);
+  for (const entryScenario of ['paper', 'revision']) {
+    for (const language of ['zh', 'en']) {
+      const prompt = buildEntryPrompt({ ...options, entryScenario }, report, { language });
+      const line = prompt.split('\n').find(line => line.startsWith(language === 'en' ? 'Candidate paths' : '候选路径'));
+      const selected = JSON.parse(line.slice(line.indexOf(': ') + 2));
+      assert.equal(selected.length, 60);
+      assert.equal(new Set(selected).size, 60);
+      for (const path of ['paper/main.tex', 'paper/refs.bib', 'reviews/reviewer-comments.md']) assert.ok(selected.includes(path));
+      assert.ok(!selected.includes('reviews/old/reviewer-comments.md'));
+      assert.match(prompt, language === 'en' ? /version ambiguity/ : /版本歧义/);
+    }
+  }
+});
+
+test('many manuscript versions cannot crowd out review evidence or choose a version implicitly', () => {
+  const sources = [...Array.from({ length: 190 }, (_, i) => `paper/manuscript-${i}.tex`), 'reviews/reviewer-comments.md', 'z/current.tex'];
+  const options = { assignments: { 'z/current.tex': 'draft:source' } };
+  const report = analyzePaperArtifacts(sources, '', options);
+  const prompt = buildEntryPrompt({ ...options, entryScenario: 'revision' }, report);
+  const line = prompt.split('\n').find(line => line.startsWith('候选路径'));
+  const selected = JSON.parse(line.slice(line.indexOf(': ') + 2));
+  assert.equal(selected.length, 60);
+  assert.ok(selected.includes('reviews/reviewer-comments.md'));
+  assert.ok(selected.includes('z/current.tex'));
+  assert.ok(selected.filter(path => path.startsWith('paper/')).length > 1);
+});
