@@ -20,9 +20,12 @@ const sources = { '/fixture/blank': [], '/fixture/second': ['sources/seed.pdf', 
 const registrations = {};
 let failScan = false;
 let failSave = false;
+let failValidation = false;
+let saveDelay = 0;
 const scope = {
   ...settings,
   set: async (key, value) => {
+    if (saveDelay) await new Promise(resolve => setTimeout(resolve, saveDelay));
     if (failSave) throw new Error('Fixture: settings failure');
     settings.update({ value: { ...settings.getSnapshot().value, [key]: value } });
   },
@@ -35,7 +38,10 @@ const ctx = {
   remote: { $mount: async () => () => {}, researchLoom: { scan: async () => {
     if (failScan) return { ok: false, error: { message: 'Fixture: offline' } };
     return { ok: true, value: { files: sources[state.getSnapshot().cwd].map((path) => ({ kind: 'file', path })), incomplete: false, warnings: [] } };
-  } } },
+  }, validateReviewFiles: async (_sessionId, request) => failValidation
+    ? { ok: false, error: { message: 'Fixture: manuscript identity mismatch' } }
+    : { ok: true, value: { manuscript: request.manuscript, revised: request.revised } },
+  } },
 };
 const inputActions = {
   setDraft: (draft) => composer.update({ draft }),
@@ -71,6 +77,8 @@ window.fixture = {
   state: () => state.getSnapshot(),
   setFailSave: (value) => { failSave = value; },
   setFailScan: (value) => { failScan = value; },
+  setFailValidation: (value) => { failValidation = value; },
+  setSaveDelay: (value) => { saveDelay = value; },
   setWritable: (value) => settings.update({ writable: value }),
   completeReview: (options = {}) => {
     const current = state.getSnapshot();

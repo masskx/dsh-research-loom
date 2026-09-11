@@ -21,6 +21,14 @@ import {
   exportProjectSnapshot, importProjectSnapshot,
 } from '../src/paper-state.js';
 
+test('scan scope aliases normalize to the same paths returned by the host', () => {
+  const project = normalizeProjectState({ scanRoot: './papers//./chapter/', excludedFolders: ['papers/./chapter//ignored'] });
+  assert.equal(project.scanRoot, 'papers/chapter');
+  assert.deepEqual(project.excludedFolders, ['papers/chapter/ignored']);
+  const report = analyzePaperArtifacts(['papers/chapter/main.md', 'papers/chapter/ignored/old.md'], '', project);
+  assert.deepEqual(report.sourceFiles, ['papers/chapter/main.md']);
+});
+
 test('paper stages keep academic order while workflows remain configurable', () => {
   assert.deepEqual(PAPER_STAGES.map((stage) => stage.id), [
     'topic', 'literature', 'design', 'data', 'analysis', 'draft', 'revision', 'submission', 'review', 'archive',

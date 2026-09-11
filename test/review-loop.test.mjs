@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeReviewLoop, completedReplies, observeLoop, parseLoopResult, loopPrompt } from '../src/review-loop.js';
+import { normalizeReviewLoop, completedReplies, observeLoop, parseLoopResult, loopPrompt, loopErrorIdentity, validateLoopFiles, validateLoopLaunch } from '../src/review-loop.js';
 import { Config } from '../lib/startup.js';
 import { exportProjectSnapshot, importProjectSnapshot } from '../src/paper-state.js';
 const issue = { id: 'R1', comment: 'Clarify question', kind: 'text', priority: 'high', status: 'open', location: 'Introduction', action: 'Clarify', evidence: '' };
@@ -37,7 +37,7 @@ test('long host windows retain a previously observed request/turn binding withou
   const observed = observeLoop(base, { nodes, running: true });
   assert.equal(observed.requestUserSeq, 4); assert.equal(observed.requestTurn, 2);
 });
-test('schema is strict about evidence, phase, missing IDs and revised version', () => {
+test('schema is strict about evidence, phase, missing IDs and required output paths', () => {
   assert.equal(parseLoopResult(raw(result('plan')), base).issues[0].id, 'R1');
   assert.throws(() => parseLoopResult('plain text', base));
   assert.throws(() => parseLoopResult(raw(result('plan')) + raw(result('plan')), base));
@@ -47,13 +47,68 @@ test('schema is strict about evidence, phase, missing IDs and revised version', 
   assert.throws(() => parseLoopResult(raw(result('plan', { blockers: ['missing paper'] })), base));
   const revise = { ...base, phase: 'revise', history: [{ result: result('plan') }] };
   assert.throws(() => parseLoopResult(raw(result('revise', { issues: [] })), revise));
-  assert.throws(() => parseLoopResult(raw(result('revise', { revised: 'paper.md' })), revise));
+  assert.throws(() => parseLoopResult(raw(result('revise', { revised: '' })), revise));
   assert.throws(() => parseLoopResult(raw(result('revise', { issues: [{ ...issue, kind: 'experiment' }] })), revise));
-  const verify = { ...base, phase: 'verify', history: [{ result: result('revise') }] };
-  assert.throws(() => parseLoopResult(raw(result('verify', { revised: 'wrong.md' })), verify));
-  assert.throws(() => parseLoopResult(raw(result('revise')), { ...revise, history: [{ result: result('verify') }] }));
   const experiment = { ...issue, kind: 'experiment' };
   assert.throws(() => parseLoopResult(raw(result('revise', { issues: [{ ...experiment, status: 'resolved', evidence: 'claimed' }] })), { ...revise, history: [{ result: result('plan', { issues: [experiment] }) }] }));
+});
+
+test('execution failure before the first assistant is terminal, but an old error is not', () => {
+  const snapshot = { nodes: nodes.slice(0, 2), running: false, lastAgentError: 'model unavailable' };
+  assert.equal(observeLoop(base, snapshot).kind, 'blocked');
+  const withOldError = { ...base, baselineAgentError: 'model unavailable' };
+  assert.equal(observeLoop(withOldError, snapshot).kind, 'waiting');
+  const cleared = observeLoop(withOldError, { ...snapshot, running: true, lastAgentError: null });
+  assert.equal(cleared.agentErrorCleared, true);
+  assert.equal(observeLoop({ ...withOldError, agentErrorCleared: cleared.agentErrorCleared }, snapshot).kind, 'blocked');
+  assert.equal(observeLoop(withOldError, { ...snapshot, nodes, turnEnds: new Map([[2, 6]]) }).kind, 'result');
+  const promptError = { op: 'send', message: 'network' };
+  assert.equal(observeLoop({ ...base, baselinePromptError: loopErrorIdentity(promptError) }, { nodes: [], promptError }).kind, 'waiting');
+  assert.equal(observeLoop(base, { nodes: [], promptError }).kind, 'blocked');
+});
+
+test('ready reports require host validation with the user baseline and canonical paths', async () => {
+  const specified = { ...base, manuscript: 'paper/main.md' };
+  const parsed = parseLoopResult(raw(result('plan', { manuscript: './paper/main.md' })), specified);
+  const checked = await validateLoopFiles(parsed, specified, async (request) => {
+    assert.deepEqual(request, { phase: 'plan', manuscript: './paper/main.md', expectedManuscript: 'paper/main.md', revised: '', previousRevised: '' });
+    return { manuscript: 'paper/main.md', revised: '' };
+  });
+  assert.equal(checked.manuscript, 'paper/main.md');
+  await assert.rejects(validateLoopFiles(parsed, specified), /宿主/);
+  await assert.rejects(validateLoopFiles(parsed, specified, async () => null), /核验结果/);
+  await assert.rejects(validateLoopFiles(result('plan', { manuscript: 'other.md' }), specified, async () => { throw new Error('Original manuscript does not match'); }), /does not match/);
+  const verify = { ...specified, phase: 'verify', history: [{ result: result('revise', { manuscript: 'paper/main.md', revised: 'new.md' }) }] };
+  await validateLoopFiles(parseLoopResult(raw(result('verify', { manuscript: './paper/main.md', revised: './new.md' })), verify), verify, async (request) => {
+    assert.equal(request.previousRevised, 'new.md');
+    assert.equal(request.expectedManuscript, 'paper/main.md');
+    return { manuscript: 'paper/main.md', revised: 'new.md' };
+  });
+});
+
+test('blocked reports remain readable without a missing manuscript or full issue list', async () => {
+  const revise = { ...base, phase: 'revise', history: [{ result: result('plan') }] };
+  const parsed = parseLoopResult(raw(result('revise', { outcome: 'blocked', manuscript: '', revised: '', issues: [], blockers: ['Cannot read original'] })), revise);
+  assert.equal((await validateLoopFiles(parsed, revise)).outcome, 'blocked');
+  await assert.rejects(validateLoopLaunch({ ...revise, history: [{ result: parsed }] }, 'verify'), /尚未就绪/);
+});
+
+test('every revision and verification launch rechecks previously accepted files', async () => {
+  const plan = { ...base, manuscript: '', status: 'ready', history: [{ result: result('plan') }] };
+  const launched = await validateLoopLaunch(plan, 'revise', async (request) => {
+    assert.deepEqual(request, { phase: 'plan', manuscript: 'paper.md', expectedManuscript: 'paper.md', revised: '', previousRevised: '' });
+    return { manuscript: 'paper.md', revised: '' };
+  });
+  assert.equal(launched.manuscript, 'paper.md');
+  const revised = { ...launched, phase: 'revise', history: [{ result: result('revise') }] };
+  for (const phase of ['verify', 'revise']) {
+    await assert.rejects(validateLoopLaunch(revised, phase, async (request) => {
+      assert.equal(request.phase, 'verify');
+      assert.equal(request.revised, 'new.md');
+      assert.equal(request.previousRevised, 'new.md');
+      throw new Error('Revision file was removed');
+    }), /removed/);
+  }
 });
 test('loop persists through host schema while project export strips live execution', () => {
   const serialized = JSON.stringify({ ...base, round: 9 });

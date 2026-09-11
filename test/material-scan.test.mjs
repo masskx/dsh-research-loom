@@ -88,3 +88,60 @@ test('aborted and unavailable scans reject instead of appearing empty and comple
   await assert.rejects(() => scanMaterialFiles(join(root, 'missing')));
   await assert.rejects(() => scanMaterialFiles('relative/project'), /workspace/);
 });
+
+test('selects the configured subtree before consuming entry, file or directory limits', async t => {
+  const root = await fixture(t);
+  await mkdir(join(root, 'paper', 'archive'), { recursive: true });
+  await mkdir(join(root, 'paper', 'node_modules'));
+  for (let i = 0; i < 8; i++) {
+    await writeFile(join(root, `unrelated-${i}.md`), 'outside scope');
+    await writeFile(join(root, 'paper', 'archive', `old-${i}.md`), 'excluded');
+  }
+  await writeFile(join(root, 'paper', 'main.md'), 'current');
+  const result = await scanMaterialFiles(root, {
+    scanRoot: './paper/', excludedFolders: ['paper/archive'], maxEntries: 1, maxFiles: 1, maxDirectories: 1,
+  });
+  assert.deepEqual(paths(result), ['paper/main.md']);
+  assert.equal(result.incomplete, false);
+});
+
+test('host scans use the receiving workspace settings and pick up subsequent scope changes', async t => {
+  const root = await fixture(t);
+  await mkdir(join(root, '论文'));
+  await mkdir(join(root, 'other'));
+  await writeFile(join(root, '论文', 'main.md'), 'paper');
+  await writeFile(join(root, 'other', 'data.csv'), 'data');
+  const key = root.replace(/\\/g, '/');
+  const config = { enabled: true, projects: { [key]: { scanRoot: '论文', excludedFolders: [] }, '/another-session': { scanRoot: 'missing' } } };
+  let service;
+  registerMaterialScanner({ provide(_name, value) { service = value; }, typert: { register() {} }, effect(setup) { setup(); } }, { get: () => config });
+  const agent = { session: { header: { cwd: root + '/' } } };
+  assert.deepEqual(paths(await service.scan(agent)), ['论文/main.md']);
+  config.projects[key] = { scanRoot: '', excludedFolders: ['论文'] };
+  assert.deepEqual(paths(await service.scan(agent)), ['other/data.csv']);
+});
+
+test('excluding a subtree does not exclude similarly named siblings and can exclude the scan root', async t => {
+  const root = await fixture(t);
+  for (const folder of ['paper', 'papers']) {
+    await mkdir(join(root, folder));
+    await writeFile(join(root, folder, 'main.md'), 'test');
+  }
+  assert.deepEqual(paths(await scanMaterialFiles(root, { excludedFolders: ['paper'] })), ['papers/main.md']);
+  assert.deepEqual(await scanMaterialFiles(root, { scanRoot: 'paper', excludedFolders: ['paper'] }), { files: [], incomplete: false, warnings: [] });
+});
+
+test('rejects unsafe or invalid configured scope and never follows links in scan-root ancestors', async t => {
+  const root = await fixture(t);
+  const outside = await fixture(t);
+  await mkdir(join(outside, 'nested'));
+  await mkdir(join(root, 'paper'));
+  await writeFile(join(root, 'file.md'), 'test');
+  await symlink(outside, join(root, 'external'), process.platform === 'win32' ? 'junction' : 'dir');
+  await symlink(join(root, 'paper'), join(root, 'alias'), process.platform === 'win32' ? 'junction' : 'dir');
+  for (const scanRoot of ['..', '../other', outside, 'C:/elsewhere', 'external/nested', 'alias', 'file.md']) {
+    await assert.rejects(() => scanMaterialFiles(root, { scanRoot }));
+  }
+  await assert.rejects(() => scanMaterialFiles(root, { excludedFolders: ['../outside'] }), /relative/);
+  await assert.rejects(() => scanMaterialFiles(root, { excludedFolders: 'paper' }), /excluded/);
+});

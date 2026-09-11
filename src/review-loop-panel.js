@@ -1,12 +1,12 @@
 import * as React from 'react';
-import { LOOP_LIMIT, completedReplies, conversationNodes, nodeText, normalizeReviewLoop, observeLoop, parseLoopResult, loopPrompt } from './review-loop.js';
+import { LOOP_LIMIT, completedReplies, conversationNodes, nodeText, normalizeReviewLoop, observeLoop, parseLoopResult, loopPrompt, loopErrorIdentity, validateLoopFiles, validateLoopLaunch } from './review-loop.js';
 const h = React.createElement;
 const field = { boxSizing: 'border-box', width: '100%', padding: 9, border: '1px solid var(--dsw-alias-border-l2,#dde1e8)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-1,#fff)', color: 'inherit', font: 'inherit' };
 const btn = { ...field, cursor: 'pointer' };
 const labels = { plan: '问题整理', revise: '修改新稿', verify: '对照复核' };
 const statuses = { awaiting: '等待对应回复', running: '执行中', ready: '等待授权修改', blocked: '需要处理阻碍', paused: '自动衔接已暂停', done: '本轮结束 · 待作者核验' };
 
-export function ReviewLoopPanel({ project, conversation, input, inputActions, cwd, sessionId, saveConfig, writable, enabled }) {
+export function ReviewLoopPanel({ project, conversation, input, inputActions, cwd, sessionId, saveConfig, validateFiles, writable, enabled }) {
   const loop = normalizeReviewLoop(project.reviewLoop);
   const replies = completedReplies(conversation);
   const [sourceSeq, setSourceSeq] = React.useState('');
@@ -15,36 +15,61 @@ export function ReviewLoopPanel({ project, conversation, input, inputActions, cw
   const [autoVerify, setAutoVerify] = React.useState(true);
   const [error, setError] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const [observationTick, setObservationTick] = React.useState(0);
   const lock = React.useRef(false);
+  const observationPending = React.useRef(false);
   const live = React.useRef(null);
   const autoPermit = React.useRef('');
   const executionEpoch = React.useRef(0);
   const mounted = React.useRef(true);
-  live.current = { conversation, input, inputActions, cwd, sessionId, writable, enabled, project };
+  live.current = { conversation, input, inputActions, cwd, sessionId, writable, enabled, project, validateFiles };
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; autoPermit.current = ''; executionEpoch.current++; }; }, []);
-  React.useEffect(() => { autoPermit.current = ''; }, [cwd, sessionId]);
+  React.useEffect(() => { autoPermit.current = ''; executionEpoch.current++; }, [cwd, sessionId, enabled, writable]);
   const source = replies.find((item) => String(item.seq) === sourceSeq) ?? replies[0];
   const active = loop && ['awaiting', 'running'].includes(loop.status);
   const otherTask = project.tasks.some((task) => task.sessionId === sessionId && ['awaiting', 'running', 'checking'].includes(task.status));
   const available = writable && enabled && !conversation.running && !input?.draft?.trim() && (!input?.phase || input.phase === 'plain') && !otherTask;
   const write = (next, expected) => saveConfig((latest) => {
+    if (!mounted.current || live.current.cwd !== cwd || live.current.sessionId !== sessionId || !live.current.enabled || !live.current.writable) throw new Error('Workspace or session changed');
     const stored = normalizeReviewLoop(latest.reviewLoop);
     if (expected && (stored?.id !== expected.id || stored?.requestId !== expected.requestId)) throw new Error('Loop changed');
     const serialized = JSON.stringify(next);
     if (serialized.length > 750000) throw new Error('Review history too large; export and start a smaller batch');
     return { reviewLoop: serialized };
   });
+  const release = () => {
+    lock.current = false;
+    // A final reply or a saved binding may arrive while a write is pending.
+    // Replay only when a newer snapshot was skipped, so a failed save cannot
+    // schedule itself repeatedly against unchanged state.
+    if (observationPending.current) {
+      observationPending.current = false;
+      if (mounted.current) setObservationTick((value) => value + 1);
+    }
+  };
   const launch = async (base, phase, sourceText = '', authorize = false) => {
     const epoch = executionEpoch.current;
-    const current = live.current;
-    if (!mounted.current || current.cwd !== cwd || current.sessionId !== sessionId || !current.enabled || !current.writable || current.conversation.running || current.input?.draft?.trim() || (current.input?.phase && current.input.phase !== 'plain') || current.project.tasks.some((task) => task.sessionId === sessionId && ['awaiting', 'running', 'checking'].includes(task.status))) {
+    const canLaunch = () => {
+      const current = live.current;
+      return epoch === executionEpoch.current && mounted.current && current.cwd === cwd && current.sessionId === sessionId && current.enabled && current.writable && !current.conversation.running && !current.input?.draft?.trim() && (!current.input?.phase || current.input.phase === 'plain') && !current.project.tasks.some((task) => task.sessionId === sessionId && ['awaiting', 'running', 'checking'].includes(task.status));
+    };
+    if (!canLaunch()) {
       autoPermit.current = ''; setError('自动衔接已暂停：请清空或发送当前草稿，并等待现有任务结束。'); return false;
     }
-    const next = { ...base, phase, status: 'awaiting', message: '', requestId: crypto.randomUUID(), requestUserSeq: 0, requestTurn: 0, baselineSeq: Math.max(0, ...conversationNodes(current.conversation).map((node) => node.seq || 0)) };
+    let validated;
+    try { validated = await validateLoopLaunch(base, phase, live.current.validateFiles); }
+    catch (failure) { autoPermit.current = ''; if (mounted.current) setError(`稿件核验失败：${failure.message}。未发送任务。`); return false; }
+    if (!canLaunch()) { autoPermit.current = ''; return false; }
+    const current = live.current;
+    const baselineAgentError = loopErrorIdentity(current.conversation.lastAgentError);
+    const baselinePromptError = loopErrorIdentity(current.conversation.promptError);
+    const next = { ...validated, phase, status: 'awaiting', message: '', requestId: crypto.randomUUID(), requestUserSeq: 0, requestTurn: 0,
+      baselineAgentError, baselinePromptError, agentErrorCleared: !baselineAgentError, promptErrorCleared: !baselinePromptError,
+      baselineSeq: Math.max(0, ...conversationNodes(current.conversation).map((node) => node.seq || 0)) };
     if (!await write(next, loop?.id === base.id ? base : null)) { autoPermit.current = ''; setError('保存任务失败，未发送。'); return false; }
     const after = live.current;
-    if (epoch !== executionEpoch.current || !mounted.current || after.cwd !== cwd || after.sessionId !== sessionId || !after.enabled || !after.writable || after.conversation.running || after.input?.draft?.trim() || (after.input?.phase && after.input.phase !== 'plain')) {
-      autoPermit.current = ''; if (mounted.current) await write({ ...next, status: 'paused', message: '发送前会话或草稿发生变化，未发送。' }, next); return false;
+    if (!canLaunch()) {
+      autoPermit.current = ''; if (mounted.current && after.cwd === cwd && after.sessionId === sessionId && after.enabled && after.writable) await write({ ...next, status: 'paused', message: '发送前会话或草稿发生变化，未发送。' }, next); return false;
     }
     if (authorize) autoPermit.current = autoVerify ? next.id : '';
     try {
@@ -57,33 +82,48 @@ export function ReviewLoopPanel({ project, conversation, input, inputActions, cw
   };
 
   React.useEffect(() => {
-    if (!loop || loop.sessionId !== sessionId || !active || !writable || !enabled || lock.current) return;
+    if (lock.current) { observationPending.current = true; return; }
+    if (!loop || loop.sessionId !== sessionId || !active || !writable || !enabled) return;
     const observation = observeLoop(loop, conversation);
-    if (observation.kind === 'waiting' && (!observation.accepted || (loop.status === 'running' && loop.requestUserSeq === observation.requestUserSeq && loop.requestTurn === observation.requestTurn))) return;
+    const errorsUnchanged = loop.agentErrorCleared === observation.agentErrorCleared && loop.promptErrorCleared === observation.promptErrorCleared;
+    if (observation.kind === 'waiting' && errorsUnchanged && (!observation.accepted || (loop.status === 'running' && loop.requestUserSeq === observation.requestUserSeq && loop.requestTurn === observation.requestTurn))) return;
     lock.current = true;
+    const epoch = executionEpoch.current;
+    const sameContext = () => mounted.current && live.current.cwd === cwd && live.current.sessionId === sessionId && live.current.enabled && live.current.writable;
     const process = async () => {
-      if (observation.kind === 'waiting') { await write({ ...loop, status: 'running', requestUserSeq: observation.requestUserSeq, requestTurn: observation.requestTurn }, loop); return; }
+      if (observation.kind === 'waiting') {
+        if (!await write({ ...loop, agentErrorCleared: observation.agentErrorCleared, promptErrorCleared: observation.promptErrorCleared,
+          ...(observation.accepted ? { status: 'running', requestUserSeq: observation.requestUserSeq, requestTurn: observation.requestTurn } : {}) }, loop)) throw new Error('Could not save request binding');
+        return;
+      }
       if (observation.kind === 'blocked') { autoPermit.current = ''; await write({ ...loop, status: 'blocked', message: observation.message }, loop); return; }
       let result;
-      try { result = parseLoopResult(observation.raw, loop); }
-      catch (failure) { autoPermit.current = ''; await write({ ...loop, status: 'blocked', message: `结果解析失败：${failure.message}。原回复保留在主对话，可选择该回复重新整理。` }, loop); return; }
+      try { result = await validateLoopFiles(parseLoopResult(observation.raw, loop), loop, validateFiles); }
+      catch (failure) { autoPermit.current = ''; if (sameContext()) await write({ ...loop, status: 'blocked', message: `结果核验失败：${failure.message}。原回复保留在主对话，可选择该回复重新整理。` }, loop); return; }
+      if (!sameContext()) { autoPermit.current = ''; return; }
+      const latestObservation = observeLoop(loop, live.current.conversation);
+      if (latestObservation.kind !== 'result' || latestObservation.assistantSeq !== observation.assistantSeq || latestObservation.raw !== observation.raw) {
+        observationPending.current = true;
+        return;
+      }
       const history = [...loop.history, { phase: loop.phase, requestId: loop.requestId, ...observation, result }].slice(-7);
-      const next = { ...loop, history, status: result.outcome === 'blocked' ? 'blocked' : loop.phase === 'plan' ? 'ready' : loop.phase === 'verify' ? 'done' : 'paused', message: result.outcome === 'blocked' ? result.blockers.join('；') : '' };
+      const next = { ...loop, history, manuscript: result.outcome === 'ready' ? result.manuscript : loop.manuscript,
+        status: result.outcome === 'blocked' ? 'blocked' : loop.phase === 'plan' ? 'ready' : loop.phase === 'verify' ? 'done' : 'paused', message: result.outcome === 'blocked' ? result.blockers.join('；') : '' };
       if (!await write(next, loop)) { autoPermit.current = ''; return; }
-      if (loop.phase === 'revise' && result.outcome === 'ready' && autoPermit.current === loop.id && mounted.current) {
+      if (loop.phase === 'revise' && result.outcome === 'ready' && autoPermit.current === loop.id && sameContext() && epoch === executionEpoch.current) {
         // One authorized revision permits exactly one read-only verification.
         autoPermit.current = '';
         await launch(next, 'verify');
       }
     };
-    void process().catch(() => { autoPermit.current = ''; if (mounted.current) setError('结果保存或衔接失败，请检查任务状态。'); }).finally(() => { lock.current = false; });
-  }, [project.reviewLoop, conversation, writable, enabled]);
+    void process().catch(() => { autoPermit.current = ''; if (mounted.current) setError('结果保存或衔接失败，请检查任务状态。'); }).finally(release);
+  }, [project.reviewLoop, conversation, writable, enabled, cwd, sessionId, observationTick]);
 
   const run = async (operation) => {
     if (lock.current) return;
     lock.current = true; setBusy(true); setError('');
     try { await operation(); } catch { setError('操作失败，未自动继续，请重试。'); autoPermit.current = ''; }
-    finally { lock.current = false; if (mounted.current) setBusy(false); }
+    finally { release(); if (mounted.current) setBusy(false); }
   };
   const last = loop?.history.at(-1)?.result;
   const sameSession = loop?.sessionId === sessionId;

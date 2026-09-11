@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import apply, { SETTINGS_NAMESPACE } from '../lib/startup.js';
+import { DSH_COMPATIBILITY, UNAVAILABLE_COMMANDS } from '../lib/skill-compatibility.js';
 
 function harness(initialEnabled = true) {
   const active = new Map();
@@ -55,18 +56,20 @@ function harness(initialEnabled = true) {
   };
 }
 
-test('enabled by default registers four skills and sixteen commands', () => {
+test('enabled by default registers four skills and thirteen runnable commands', () => {
   const app = harness();
   apply(app.ctx);
-  assert.equal(app.active.size, 20);
+  assert.equal(app.active.size, 17);
   const modelInvocable = [...app.active.values()]
     .filter((skill) => skill.invocation?.modelInvocable !== false);
   const commands = [...app.active.values()]
     .filter((skill) => skill.invocation?.modelInvocable === false);
   assert.equal(modelInvocable.length, 4);
-  assert.equal(commands.length, 16);
+  assert.equal(commands.length, 13);
   assert(app.active.has('academic-pipeline'));
   assert(app.active.has('ars-full'));
+  for (const name of Object.keys(UNAVAILABLE_COMMANDS)) assert.equal(app.active.has(name), false, name);
+  for (const skill of app.active.values()) assert.ok(skill.content.startsWith(DSH_COMPATIBILITY));
 });
 
 test('soft switch unregisters and restores all skills without duplicates', () => {
@@ -77,9 +80,9 @@ test('soft switch unregisters and restores all skills without duplicates', () =>
   app.setEnabled(false);
   assert.equal(app.active.size, 0);
   app.setEnabled(true);
-  assert.equal(app.active.size, 20);
+  assert.equal(app.active.size, 17);
   app.setEnabled(true);
-  assert.equal(app.active.size, 20);
+  assert.equal(app.active.size, 17);
 });
 
 test('disabled persisted setting starts with an empty catalog', () => {

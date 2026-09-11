@@ -160,7 +160,7 @@ export function normalizeRelativeRoot(value) {
   if (typeof value !== 'string') return '';
   const path = value.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
   if (/^(\/|[a-z]:)/i.test(path) || path.split('/').includes('..')) return '';
-  return path === '.' ? '' : path;
+  return path.split('/').filter((part) => part && part !== '.').join('/');
 }
 
 export function isMaterialAssignment(id) {

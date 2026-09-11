@@ -108,7 +108,7 @@ dsh plugin --profile web remove dsh-academic-research-skills
 dsh web --port 3001
 ```
 
-看到 `registered 20 skills (enabled)` 表示技能注册成功，不代表端口或模型服务一定正常。
+看到 `registered 17 skills (enabled)` 表示技能注册成功，不代表端口或模型服务一定正常。
 反馈时提供系统、版本、复现步骤和脱敏日志：[Issues](https://github.com/masskx/dsh-research-loom/issues)。
 
 ### 远程使用有什么不同

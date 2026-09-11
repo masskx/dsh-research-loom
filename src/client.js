@@ -38,7 +38,7 @@ const copy = {
   zh: {
     title: 'Academic Research Skills', description: '学术研究、论文写作、同行评审与完整学术流水线',
     enabled: '功能已启用', disabled: '功能已停用', live: '实时生效', saving: '正在保存设置……',
-    hintEnabled: '4 个核心技能和 16 个 /ars-* 命令已加入技能目录。', hintDisabled: '技能已从目录注销；配置卡片仍保留，可随时重新启用。', readOnly: '当前设置文档不可写。',
+    hintEnabled: '4 个核心技能和 13 个 /ars-* 命令已加入技能目录。阅读标记、撤销阅读标记和缓存清理依赖未移植的上游工具，暂不启用。', hintDisabled: '技能已从目录注销；配置卡片仍保留，可随时重新启用。', readOnly: '当前设置文档不可写。',
     workbench: '论文工作台', autoStage: '建议推进', workflow: '论文流程', standard: '目标标准',
     openWorkbench: '打开论文工作台', closeWorkbench: '收起论文工作台',
     materialScore: '材料完整度初评', scoreNote: '基于文件路径与类型，不代表论文质量',
@@ -59,7 +59,7 @@ const copy = {
   en: {
     title: 'Academic Research Skills', description: 'Research, paper writing, peer review, and the full academic pipeline',
     enabled: 'Enabled', disabled: 'Disabled', live: 'Applies immediately', saving: 'Saving…',
-    hintEnabled: '4 core skills and 16 /ars-* commands are available.', hintDisabled: 'Skills are removed; this card remains available.', readOnly: 'Settings are read-only.',
+    hintEnabled: '4 core skills and 13 /ars-* commands are available. Reading attestations and cache clearing require unported upstream tools and are disabled.', hintDisabled: 'Skills are removed; this card remains available.', readOnly: 'Settings are read-only.',
     workbench: 'Paper workbench', autoStage: 'Next step', workflow: 'Workflow', standard: 'Target standard',
     openWorkbench: 'Open paper workbench', closeWorkbench: 'Collapse paper workbench',
     materialScore: 'Material completeness', scoreNote: 'Based on path/type evidence; not a paper-quality score',
@@ -209,7 +209,7 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
     if (snapshot.status !== 'ready' || !enabled || !visibleForSurface || !cwd || !sessionId) return undefined;
     const controller = new AbortController();
     let live = true;
-    setScan((previous) => ({ status: 'scanning', report: previous.report, error: '' }));
+    setScan((previous) => ({ ...previous, status: 'scanning', error: '' }));
     const run = async () => {
       try {
         const result = await ctx.remote.researchLoom.scan(sessionId, controller.signal);
@@ -229,12 +229,20 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
       } catch (error) {
         if (!live || controller.signal.aborted) return;
         console.warn('[dsh-academic-research-skills] artifact scan failed', error);
-        setScan((previous) => ({ status: 'error', report: previous.report, error: error instanceof Error ? error.message : String(error) }));
+        setScan((previous) => ({ ...previous, status: 'error', error: error instanceof Error ? error.message : String(error) }));
       }
     };
     void run();
     return () => { live = false; controller.abort(); };
-  }, [ctx, scope, sessionId, cwd, enabled, visibleForSurface, scanNonce, snapshot.status]);
+  }, [ctx, scope, sessionId, cwd, enabled, visibleForSurface, scanNonce, snapshot.status,
+    snapshot.value?.projects?.[normalizeWorkspaceKey(cwd)]?.scanRoot,
+    JSON.stringify(snapshot.value?.projects?.[normalizeWorkspaceKey(cwd)]?.excludedFolders ?? [])]);
+
+  const validateFiles = React.useCallback(async (request) => {
+    const result = await ctx.remote.researchLoom.validateReviewFiles(sessionId, request);
+    if (!result?.ok) throw new Error(result?.error?.message ?? '稿件文件身份核验失败，请检查宿主版本与文件路径。');
+    return result.value;
+  }, [ctx, sessionId]);
 
   const key = normalizeWorkspaceKey(cwd);
   const projects = snapshot.value?.projects ?? {};
@@ -273,8 +281,11 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
     if (status !== task.status) {
       taskWrites.current.add(task.id);
       void saveConfig((latest) => ({ tasks: latest.tasks.map((t) => t.id === task.id ? { ...t, status } : t) }))
+        .then((saved) => {
+          const live = liveInput.current;
+          if (saved && live.cwd === cwd && live.sessionId === sessionId && live.enabled && (status === 'checking' || status === 'failed')) setScanNonce((n) => n + 1);
+        })
         .finally(() => taskWrites.current.delete(task.id));
-      if (status === 'checking' || status === 'failed') setScanNonce((n) => n + 1);
     }
   }, [running, endSeq, conversation?.promptError, conversation?.lastAgentError, JSON.stringify(project.tasks), enabled, visibleForSurface, cwd, sessionId, snapshot.status]);
 
@@ -435,7 +446,7 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
     smallButton(language === 'zh' ? '保留原草稿，取消' : 'Keep draft and cancel', { onClick: () => setPendingDraft(null) })) : null,
   running ? React.createElement('div', { role: 'status' }, language === 'zh' ? '当前对话正在执行，完成后会检查新增材料。' : 'Conversation running; new materials will be checked afterward.') : null,
   view === 'overview' ? React.createElement(GettingStartedPanel, { key: `guide-${cwd}`, project, report, saveConfig, submitPrompt, language, cwd, disabled: sending || running || !inputActions || scan.status !== 'ready', writable: snapshot.writable, onMaterials: () => setView('materials') }) : null,
-  React.createElement('div', { hidden: view !== 'overview' }, React.createElement(ReviewLoopPanel, { key: `loop-${cwd}-${sessionId}`, project, conversation, input, inputActions, cwd, sessionId, saveConfig, writable: snapshot.writable, enabled })),
+  React.createElement('div', { hidden: view !== 'overview' }, React.createElement(ReviewLoopPanel, { key: `loop-${cwd}-${sessionId}`, project, conversation, input, inputActions, cwd, sessionId, saveConfig, validateFiles, writable: snapshot.writable, enabled })),
   view === 'tools' ? React.createElement(OverviewPanel, { key: `overview-${cwd}`, project, report, workflow: workflowIds, nextStage: currentStageId, saveConfig, checkResults, language, onStage: (id) => chooseStage(PAPER_STAGES.find((s) => s.id === id)) }) : null,
   view === 'materials' ? React.createElement(MaterialsPanel, { key: cwd, project, report, saveConfig, language, rescan: () => setScanNonce((n) => n + 1), scanning: scan.status === 'scanning', fillFile: (path) => { void submitPrompt(language === 'zh' ? `请读取工作区文件 ${JSON.stringify(path)}，核验题名、作者、年份、主要结论及证据页码。明确标注全文、摘要或不可读状态，不得编造读取结果。` : `Read workspace file ${JSON.stringify(path)}; verify metadata, findings and page evidence. State whether full text, abstract only, or unreadable.`, false); } }) : null,
   view === 'tools' ? React.createElement('details', { 'data-testid': 'advanced-tools', style: { borderTop: `1px solid ${colors.border}`, paddingTop: 10 } },
