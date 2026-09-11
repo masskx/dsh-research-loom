@@ -134,6 +134,7 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
   const [actionMessage, setActionMessage] = React.useState('');
   const [pendingDraft, setPendingDraft] = React.useState(null);
   const ownedDraft = React.useRef(null);
+  const reviewController = React.useRef(null);
   const submitLock = React.useRef(false);
   const panelElement = React.useRef(null);
   const taskWrites = React.useRef(new Set());
@@ -241,6 +242,11 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
   const validateFiles = React.useCallback(async (request) => {
     const result = await ctx.remote.researchLoom.validateReviewFiles(sessionId, request);
     if (!result?.ok) throw new Error(result?.error?.message ?? '稿件文件身份核验失败，请检查宿主版本与文件路径。');
+    return result.value;
+  }, [ctx, sessionId]);
+  const inspectChanges = React.useCallback(async (request) => {
+    const result = await ctx.remote.researchLoom.inspectReviewChanges(sessionId, request);
+    if (!result?.ok) throw new Error(result?.error?.message ?? '无法读取稿件差异，请检查文件路径并重新加载插件。');
     return result.value;
   }, [ctx, sessionId]);
 
@@ -445,8 +451,11 @@ function PaperStatusDock({ ctx, scope, sessionId, useSessions, useSession, useIn
     smallButton(language === 'zh' ? '替换当前草稿' : 'Replace current draft', { disabled: running || sending, onClick: confirmDraftReplacement }),
     smallButton(language === 'zh' ? '保留原草稿，取消' : 'Keep draft and cancel', { onClick: () => setPendingDraft(null) })) : null,
   running ? React.createElement('div', { role: 'status' }, language === 'zh' ? '当前对话正在执行，完成后会检查新增材料。' : 'Conversation running; new materials will be checked afterward.') : null,
-  view === 'overview' ? React.createElement(GettingStartedPanel, { key: `guide-${cwd}`, project, report, saveConfig, submitPrompt, language, cwd, disabled: sending || running || !inputActions || scan.status !== 'ready', writable: snapshot.writable, onMaterials: () => setView('materials') }) : null,
-  React.createElement('div', { hidden: view !== 'overview' }, React.createElement(ReviewLoopPanel, { key: `loop-${cwd}-${sessionId}`, project, conversation, input, inputActions, cwd, sessionId, saveConfig, validateFiles, writable: snapshot.writable, enabled })),
+  view === 'overview' ? React.createElement(GettingStartedPanel, { key: `guide-${cwd}`, project, report, saveConfig, submitPrompt, language, cwd, disabled: sending || running || !inputActions || scan.status !== 'ready', writable: snapshot.writable, onMaterials: () => setView('materials'), onStartReview: intake => reviewController.current?.startFromFiles(intake) ?? false, onReviewTasks: () => {
+    const target = panelElement.current?.querySelector('[data-testid="review-loop"]');
+    if (target) { target.open = true; target.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+  } }) : null,
+  React.createElement('div', { hidden: view !== 'overview' }, React.createElement(ReviewLoopPanel, { key: `loop-${cwd}-${sessionId}`, project, conversation, input, inputActions, cwd, sessionId, saveConfig, validateFiles, inspectChanges, report, controllerRef: reviewController, writable: snapshot.writable, enabled })),
   view === 'tools' ? React.createElement(OverviewPanel, { key: `overview-${cwd}`, project, report, workflow: workflowIds, nextStage: currentStageId, saveConfig, checkResults, language, onStage: (id) => chooseStage(PAPER_STAGES.find((s) => s.id === id)) }) : null,
   view === 'materials' ? React.createElement(MaterialsPanel, { key: cwd, project, report, saveConfig, language, rescan: () => setScanNonce((n) => n + 1), scanning: scan.status === 'scanning', fillFile: (path) => { void submitPrompt(language === 'zh' ? `请读取工作区文件 ${JSON.stringify(path)}，核验题名、作者、年份、主要结论及证据页码。明确标注全文、摘要或不可读状态，不得编造读取结果。` : `Read workspace file ${JSON.stringify(path)}; verify metadata, findings and page evidence. State whether full text, abstract only, or unreadable.`, false); } }) : null,
   view === 'tools' ? React.createElement('details', { 'data-testid': 'advanced-tools', style: { borderTop: `1px solid ${colors.border}`, paddingTop: 10 } },

@@ -14,14 +14,14 @@ const waiting = { nodes: [user], running: true, turnEnds: new Map(), lastAgentEr
 const completed = { nodes: [user, assistant()], running: false, turnEnds: new Map([[2, 6]]), lastAgentError: null };
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 
-async function mount({ loop = base, conversation = waiting, save, validateFiles, onSubmit } = {}) {
+async function mount({ loop = base, conversation = waiting, save, validateFiles, onSubmit, projectPatch = {}, controllerRef } = {}) {
   let renderer;
   let draft = '';
   let saves = 0;
   const submitted = [];
   const fixture = {
     props: {
-      project: { tasks: [], reviewLoop: JSON.stringify(loop) }, conversation,
+      project: { tasks: [], reviewLoop: JSON.stringify(loop), ...projectPatch }, conversation, controllerRef,
       input: { draft: '', phase: 'plain' }, cwd: '/workspace', sessionId: 'one', writable: true, enabled: true,
       validateFiles: validateFiles ?? (async (request) => ({ manuscript: request.manuscript.replace(/^\.\//, ''), revised: request.revised.replace(/^\.\//, '') })),
       saveConfig: async (patch) => {
@@ -59,6 +59,63 @@ test('a completed reply arriving during a delayed binding save is adopted withou
   assert.equal(fixture.loop.manuscript, 'paper.md');
   assert.equal(fixture.loop.history[0].result.manuscript, 'paper.md');
   assert.equal(fixture.saves, 2);
+  await act(async () => fixture.unmount());
+});
+
+test('confirmed original review files start a bound plan without selecting an assistant reply', async () => {
+  const controllerRef = React.createRef();
+  const intake = { manuscript: 'paper.md', reviewFiles: ['reviews/original.txt'], round: '', relationship: 'unknown', confirmed: true };
+  const fixture = await mount({ loop: null, conversation: { nodes: [], running: false }, projectPatch: { revisionIntake: intake }, controllerRef });
+  await act(async () => { assert.equal(await controllerRef.current.startFromFiles(intake), true); });
+  assert.equal(fixture.submitted.length, 1);
+  assert.equal(fixture.loop.sourceType, 'files');
+  assert.deepEqual(fixture.loop.sourceFiles, intake.reviewFiles);
+  assert.match(fixture.submitted[0], /reviews\/original.txt/);
+  assert.match(fixture.submitted[0], /unknown/);
+  assert.equal(fixture.loop.history.length, 0);
+  await act(async () => fixture.unmount());
+});
+
+test('file ingestion refuses stale source choices and existing composer drafts', async () => {
+  const controllerRef = React.createRef();
+  const intake = { manuscript: 'paper.md', reviewFiles: ['reviews/original.txt'], relationship: 'unknown', confirmed: true };
+  const fixture = await mount({ loop: null, conversation: { nodes: [], running: false }, projectPatch: { revisionIntake: intake }, controllerRef });
+  await act(async () => { assert.equal(await controllerRef.current.startFromFiles({ ...intake, manuscript: 'other.md' }), false); });
+  await act(async () => fixture.update({ input: { draft: 'My unsent message', phase: 'plain' } }));
+  await act(async () => { assert.equal(await controllerRef.current.startFromFiles(intake), false); });
+  assert.equal(fixture.submitted.length, 0);
+  assert.equal(fixture.props.input.draft, 'My unsent message');
+  await act(async () => fixture.unmount());
+});
+
+test('a novice selects a text card without writing scope; experimental cards remain unselectable', async () => {
+  const plan = result('plan', { issues: [issue, { ...issue, id: 'R2', kind: 'experiment' }] });
+  const fixture = await mount({ loop: { ...planned, history: [{ phase: 'plan', requestId: 'request', result: plan }] }, conversation: completed });
+  assert.equal(fixture.root.findAllByProps({ 'aria-label': '选择修改 R2' }).length, 0);
+  await act(async () => { fixture.root.findByProps({ 'aria-label': '选择修改 R1' }).props.onChange({ target: { checked: true } }); });
+  await act(async () => { fixture.root.findAllByType('button').find(node => node.props.children === '授权本轮修改并执行').props.onClick(); });
+  assert.equal(fixture.submitted.length, 1);
+  assert.deepEqual(fixture.loop.selectedIssueIds, ['R1']);
+  assert.match(fixture.loop.scope, /R1/);
+  assert.doesNotMatch(fixture.loop.scope, /R2/);
+  await act(async () => fixture.unmount());
+});
+
+test('an interrupted revision resumes read-only with the previous plan and no fake successful revision', async () => {
+  const fixture = await mount({ loop: { ...planned, status: 'blocked', phase: 'revise', requestId: 'failed', round: 1, selectedIssueIds: ['R1'] }, conversation: { nodes: [], running: false }, onSubmit: (prompt, fixture) => {
+    const requestId = prompt.match(/\[Research Loom review ([^\]]+)\]/)[1];
+    fixture.update({ conversation: { running: false, nodes: [
+      { kind: 'user', seq: 20, content: [{ type: 'text', text: `[Research Loom review ${requestId}]` }] },
+      { ...assistant('verify'), seq: 21, turn: 3 },
+    ], turnEnds: new Map([[3, 22]]) } });
+  } });
+  await act(async () => fixture.root.findByProps({ 'aria-label': '恢复修订稿路径' }).props.onChange({ target: { value: 'new.md' } }));
+  await act(async () => fixture.root.findAllByType('button').find(node => node.props.children === '只读检查这份稿件并恢复记录').props.onClick());
+  assert.equal(fixture.submitted.length, 1);
+  assert.match(fixture.submitted[0], /只读恢复/);
+  assert.equal(fixture.loop.status, 'done');
+  assert.deepEqual(fixture.loop.history.map(item => item.phase), ['plan', 'verify']);
+  assert.deepEqual(fixture.loop.history.at(-1).result.issues.map(item => item.id), ['R1']);
   await act(async () => fixture.unmount());
 });
 

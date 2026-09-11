@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeReviewLoop, completedReplies, observeLoop, parseLoopResult, loopPrompt, loopErrorIdentity, validateLoopFiles, validateLoopLaunch } from '../src/review-loop.js';
+import { normalizeReviewLoop, completedReplies, observeLoop, parseLoopResult, loopPrompt, loopErrorIdentity, validateLoopFiles, validateLoopLaunch, lastReadyResult, buildIssueScope, ISSUE_SELECTION_LIMIT } from '../src/review-loop.js';
+import { mkdtemp, writeFile, link, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { validateReviewFiles } from '../lib/review-files.js';
 import { Config } from '../lib/startup.js';
 import { exportProjectSnapshot, importProjectSnapshot } from '../src/paper-state.js';
 const issue = { id: 'R1', comment: 'Clarify question', kind: 'text', priority: 'high', status: 'open', location: 'Introduction', action: 'Clarify', evidence: '' };
@@ -12,6 +16,27 @@ const nodes = [
   { kind: 'user', seq: 4, content: [{ type: 'text', text: '[Research Loom review request]' }] },
   { kind: 'assistant', seq: 5, turn: 2, messageId: 'new', blocks: [{ kind: 'reasoning', text: 'private reasoning' }, { kind: 'text', text: raw(result('plan')) }] },
 ];
+test('original-file plans require a quote and location in an explicitly selected source', () => {
+  const loop = { ...base, sourceType: 'files', sourceFiles: ['reviews/original.txt'] };
+  assert.throws(() => parseLoopResult(raw(result('plan')), loop), /原始意见缺少/);
+  const sourced = { ...issue, source: { path: 'reviews/original.txt', quote: 'Clarify question', location: 'paragraph 1' } };
+  assert.equal(parseLoopResult(raw(result('plan', { issues: [sourced] })), loop).issues[0].source.quote, 'Clarify question');
+  assert.throws(() => parseLoopResult(raw(result('plan', { issues: [{ ...sourced, source: { ...sourced.source, path: 'responses/draft.txt' } }] })), loop), /原始意见缺少/);
+});
+
+test('explicit recovery path for an accepted revision must match that revision instead of being silently ignored', async () => {
+  const accepted = result('revise');
+  for (const phase of ['revise', 'verify']) {
+    const loop = { ...base, phase, status: 'paused', manuscript: 'paper.md', recoveryRevised: 'wrong.md',
+      history: [{ phase: 'revise', requestId: phase === 'revise' ? 'request' : 'older', result: accepted }] };
+    await assert.rejects(() => validateLoopLaunch(loop, 'verify', async request => {
+      assert.equal(request.phase, 'verify');
+      assert.equal(request.revised, 'wrong.md');
+      assert.equal(request.previousRevised, 'new.md');
+      throw new Error('wrong revision');
+    }), /wrong revision/);
+  }
+});
 test('DSH result uses actual matching user and completed assistant turn, never reasoning', () => {
   const conversation = { nodes, turnEnds: new Map([[1, 3], [2, 6]]), running: false };
   const observed = observeLoop(base, conversation);
@@ -122,4 +147,132 @@ test('revision and verification prompts carry previous issues, scope and bounded
   const prompt = loopPrompt({ ...base, phase: 'revise', round: 1, scope: 'Only introduction', history: [{ result: result('plan') }] });
   for (const expected of ['Only introduction', 'R1', '保留原稿', '最多 2 轮', '[Research Loom review request]', 'kind=text']) assert.ok(prompt.includes(expected));
   assert.ok(loopPrompt({ ...base, phase: 'verify' }).includes('只读复核，不改稿'));
+});
+
+test('legacy loops gain novice defaults while invalid selections and oversized source lists are rejected', () => {
+  const restored = normalizeReviewLoop({ ...base, history: [{ phase: 'plan', result: result('plan') }] });
+  assert.equal(restored.sourceType, 'reply');
+  assert.deepEqual(restored.sourceFiles, []);
+  assert.deepEqual(restored.selectedIssueIds, []);
+  assert.equal(restored.recoveryRevised, '');
+  assert.equal(restored.reviewRelationship, 'unknown');
+  assert.equal(restored.history[0].result.issues[0].applicability, 'uncertain');
+  assert.equal(restored.history[0].result.issues[0].explanation, '');
+  assert.equal(normalizeReviewLoop({ ...base, selectedIssueIds: ['R1', 'R1'] }), null);
+  assert.equal(normalizeReviewLoop({ ...base, sourceFiles: Array.from({ length: 21 }, (_, i) => `review-${i}.txt`) }), null);
+  assert.equal(normalizeReviewLoop({ ...base, selectedIssueIds: Array.from({ length: ISSUE_SELECTION_LIMIT + 1 }, (_, i) => `R${i}`) }), null);
+});
+
+test('review source provenance survives phases and cannot be omitted or rewritten', () => {
+  const sourced = { ...issue, source: { path: 'reviews/round1.txt', reviewer: 'Reviewer 1', commentId: '2', location: 'paragraph 3', quote: 'Clarify question' }, explanation: 'Explain the question', completionCheck: 'Compare with introduction', missingEvidence: 'Submission version', applicability: 'uncertain' };
+  const previous = parseLoopResult(raw(result('plan', { issues: [sourced] })), base);
+  const revise = { ...base, phase: 'revise', history: [{ result: previous }] };
+  assert.deepEqual(parseLoopResult(raw(result('revise', { issues: [sourced] })), revise).issues[0].source, sourced.source);
+  assert.throws(() => parseLoopResult(raw(result('revise')), revise), /来源/);
+  assert.throws(() => parseLoopResult(raw(result('revise', { issues: [{ ...sourced, source: { ...sourced.source, quote: 'Author reply says it is done' } }] })), revise), /来源/);
+  assert.throws(() => parseLoopResult(raw(result('plan', { issues: [{ ...sourced, source: { path: 7 } }] })), base), /来源/);
+  assert.throws(() => parseLoopResult(raw(result('plan', { issues: [{ ...sourced, source: { quote: 'a'.repeat(4001) } }] })), base), /来源/);
+  assert.throws(() => parseLoopResult(raw(result('plan', { issues: [{ ...sourced, applicability: 'verified' }] })), base), /适用/);
+});
+
+test('a blocked result cannot erase the accepted ledger on a later successful retry', () => {
+  const accepted = result('plan', { issues: [issue, { ...issue, id: 'R2' }] });
+  const failed = result('revise', { outcome: 'blocked', issues: [], blockers: ['Interrupted'] });
+  const recovery = { ...base, phase: 'verify', history: [{ result: accepted }, { result: failed }] };
+  assert.equal(lastReadyResult(recovery), accepted);
+  assert.throws(() => parseLoopResult(raw(result('verify')), recovery), /遗漏/);
+  assert.throws(() => parseLoopResult(raw(result('verify', { issues: [{ ...issue, comment: 'Changed original' }, { ...issue, id: 'R2' }] })), recovery), /原意见/);
+  assert.equal(parseLoopResult(raw(result('verify', { issues: accepted.issues })), recovery).issues.length, 2);
+});
+
+test('issue selection scopes only unresolved text tasks and prevents promotion of other tasks', async () => {
+  const issues = [issue, { ...issue, id: 'R2' }, { ...issue, id: 'EXP', kind: 'experiment' }, { ...issue, id: 'DONE', status: 'resolved', evidence: 'Done' }];
+  assert.match(buildIssueScope(issues, ['R1'], 'Only abstract'), /R1.*Clarify/);
+  for (const ids of [[], ['missing'], ['R1', 'R1'], ['EXP'], ['DONE']]) assert.throws(() => buildIssueScope(issues, ids));
+  assert.throws(() => buildIssueScope(issues, ['R1'], 'a'.repeat(1001)));
+  const many = Array.from({ length: ISSUE_SELECTION_LIMIT }, (_, i) => ({ ...issue, id: String(i).padEnd(80, 'x'), action: 'a'.repeat(4000) }));
+  assert.ok(buildIssueScope(many, many.map((item) => item.id), 'n'.repeat(1000)).length <= 4000);
+  const revise = { ...base, phase: 'revise', selectedIssueIds: ['R1'], history: [{ result: result('plan', { issues }) }] };
+  const modified = issues.map((item) => item.id === 'R1' ? { ...item, status: 'resolved', evidence: 'Abstract paragraph 1' } : item);
+  assert.equal(parseLoopResult(raw(result('revise', { issues: modified })), revise).issues[0].status, 'resolved');
+  assert.throws(() => parseLoopResult(raw(result('revise', { issues: modified.map((item) => item.id === 'R2' ? { ...item, status: 'partial' } : item) })), revise), /未选择/);
+  assert.throws(() => parseLoopResult(raw(result('revise', { issues: [...modified, { ...issue, id: 'new', status: 'resolved', evidence: 'claimed' }] })), revise), /未选择/);
+  await assert.rejects(validateLoopLaunch({ ...revise, selectedIssueIds: ['EXP'] }, 'revise', async () => { throw new Error('should not call host'); }), /文字问题/);
+});
+
+test('recovery validates a real independent output without inventing a successful revision record', async () => {
+  const accepted = result('plan');
+  const failed = result('revise', { outcome: 'blocked', issues: [], blockers: ['Lost final response'] });
+  const interrupted = { ...base, phase: 'revise', status: 'blocked', manuscript: 'paper.md', recoveryRevised: './candidate.md', history: [{ result: accepted }, { result: failed }] };
+  const launched = await validateLoopLaunch(interrupted, 'verify', async (request) => {
+    assert.deepEqual(request, { phase: 'revise', manuscript: 'paper.md', expectedManuscript: 'paper.md', revised: './candidate.md', previousRevised: '' });
+    return { manuscript: 'paper.md', revised: 'candidate.md' };
+  });
+  assert.equal(launched.recoveryRevised, 'candidate.md');
+  assert.equal(launched.history, interrupted.history);
+  assert.equal(lastReadyResult(launched), accepted);
+  await assert.rejects(validateLoopLaunch(interrupted, 'verify'), /宿主/);
+  await assert.rejects(validateLoopLaunch({ ...interrupted, recoveryRevised: '' }, 'verify'), /指定/);
+  const verification = { ...launched, phase: 'verify' };
+  await validateLoopFiles(parseLoopResult(raw(result('verify', { revised: './candidate.md' })), verification), verification, async (request) => {
+    assert.equal(request.phase, 'verify');
+    assert.equal(request.previousRevised, 'candidate.md');
+    return { manuscript: 'paper.md', revised: 'candidate.md' };
+  });
+  const retried = await validateLoopLaunch(verification, 'verify', async (request) => {
+    assert.equal(request.phase, 'revise');
+    assert.equal(request.previousRevised, '');
+    return { manuscript: 'paper.md', revised: 'candidate.md' };
+  });
+  assert.equal(retried.recoveryRevised, 'candidate.md');
+});
+
+test('recovery rejects original and previous-revision hardlink aliases and missing output', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'loom-recovery-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, 'paper.md'), 'original');
+  await writeFile(join(root, 'new.md'), 'accepted previous revision');
+  await writeFile(join(root, 'candidate.md'), 'unaccepted candidate');
+  await link(join(root, 'paper.md'), join(root, 'original-alias.md'));
+  await link(join(root, 'new.md'), join(root, 'previous-alias.md'));
+  const interrupted = { ...base, phase: 'revise', status: 'paused', manuscript: 'paper.md', history: [{ result: result('verify') }] };
+  const validate = (request) => validateReviewFiles(root, request);
+  await assert.rejects(validateLoopLaunch({ ...interrupted, recoveryRevised: 'original-alias.md' }, 'verify', validate), /separate file/);
+  await assert.rejects(validateLoopLaunch({ ...interrupted, recoveryRevised: 'previous-alias.md' }, 'verify', validate), /preserve the previous/);
+  await assert.rejects(validateLoopLaunch({ ...interrupted, recoveryRevised: 'missing.md' }, 'verify', validate), /ENOENT/);
+  const recovered = await validateLoopLaunch({ ...interrupted, recoveryRevised: 'candidate.md' }, 'verify', validate);
+  assert.equal(recovered.recoveryRevised, 'candidate.md');
+});
+
+test('a failed verification retries the accepted revised file and never uses a blocked output path', async () => {
+  const ready = result('revise');
+  const blocked = result('verify', { outcome: 'blocked', revised: 'wrong.md', issues: [], blockers: ['Provider failure'] });
+  const retry = { ...base, phase: 'verify', status: 'blocked', history: [{ result: ready }, { result: blocked }] };
+  await validateLoopLaunch(retry, 'verify', async (request) => {
+    assert.equal(request.phase, 'verify');
+    assert.equal(request.revised, 'new.md');
+    assert.equal(request.previousRevised, 'new.md');
+    return { manuscript: 'paper.md', revised: 'new.md' };
+  });
+});
+
+test('a successfully accepted revision can continue from paused status without a recovery candidate', async () => {
+  const paused = { ...base, phase: 'revise', status: 'paused', history: [{ requestId: base.requestId, result: result('revise') }] };
+  await validateLoopLaunch(paused, 'verify', async (request) => {
+    assert.equal(request.phase, 'verify');
+    assert.equal(request.revised, 'new.md');
+    assert.equal(request.previousRevised, 'new.md');
+    return { manuscript: 'paper.md', revised: 'new.md' };
+  });
+  await assert.rejects(validateLoopLaunch({ ...paused, requestId: 'different-request' }, 'verify'), /尚未确认/);
+});
+
+test('direct-source planning and interrupted verification explain provenance, uncertainty and next actions', async () => {
+  const direct = { ...base, sourceType: 'files', sourceFiles: ['reviews/round1.txt'], reviewRound: 'Round 1', reviewRelationship: 'historical' };
+  const prompt = loopPrompt(direct, 'SHOULD_NOT_SUBSTITUTE_SOURCE');
+  for (const expected of ['reviews/round1.txt', 'Round 1', 'historical', '作者回复草稿', 'applicability=uncertain', 'explanation', 'completionCheck', 'missingEvidence']) assert.ok(prompt.includes(expected));
+  assert.ok(!prompt.includes('SHOULD_NOT_SUBSTITUTE_SOURCE'));
+  await assert.rejects(validateLoopLaunch({ ...direct, sourceFiles: [] }, 'plan'), /来源文件/);
+  const recovery = loopPrompt({ ...base, phase: 'verify', recoveryRevised: 'candidate.md', history: [{ result: result('plan') }] });
+  for (const expected of ['candidate.md', '中断后的只读恢复', '不得重新执行修改', '全部未解决任务', '不保证引文真实性']) assert.ok(recovery.includes(expected));
 });

@@ -41,6 +41,9 @@ const ctx = {
   }, validateReviewFiles: async (_sessionId, request) => failValidation
     ? { ok: false, error: { message: 'Fixture: manuscript identity mismatch' } }
     : { ok: true, value: { manuscript: request.manuscript, revised: request.revised } },
+    inspectReviewChanges: async (_sessionId, request) => ({ ok: true, value: { ...request, status: 'available', same: false,
+      originalHash: 'fixture-original', revisedHash: 'fixture-revised', before: { startLine: 2, endLine: 2, text: 'Six comparison methods.', truncated: false },
+      after: { startLine: 2, endLine: 2, text: 'Ten comparison methods.', truncated: false }, notice: '隔离演示中的模拟差异；真实文件比较由宿主文件系统测试验证。' } }),
   } },
 };
 const inputActions = {
@@ -73,6 +76,7 @@ function App() {
   </main>;
 }
 window.fixture = {
+  addFiles: paths => { const cwd = state.getSnapshot().cwd; sources[cwd] = [...new Set([...sources[cwd], ...paths])]; },
   settings: () => settings.getSnapshot().value,
   state: () => state.getSnapshot(),
   setFailSave: (value) => { failSave = value; },
@@ -86,8 +90,8 @@ window.fixture = {
     const seq = Math.max(0, ...current.nodes.map((node) => node.seq)) + 1;
     const turn = Math.max(0, ...current.turnEnds.keys()) + 1;
     const result = { version: 1, phase: loop.phase, outcome: 'ready', summary: '模拟结果，不是真实学术结论', manuscript: 'paper/main.md', revised: loop.phase === 'plan' ? '' : `paper/revised-${loop.round}.md`, issues: [
-      { id: 'R1.1', comment: '引言未说明贡献', kind: 'text', priority: 'high', status: loop.phase === 'plan' || options.unresolved ? 'open' : 'resolved', location: '引言第 3 段', action: '明确研究问题', evidence: loop.phase === 'plan' ? '' : '修订稿引言第 3 段说明研究问题' },
-      { id: 'R1.2', comment: '缺少外部验证', kind: 'experiment', priority: 'high', status: 'open', location: '结果', action: '作者需补实验', evidence: '' },
+      { id: 'R1.1', comment: '引言未说明贡献', source: { path: loop.sourceFiles?.[0] || '', reviewer: 'R1', commentId: '1', location: '第 1 段', quote: '引言未说明贡献' }, explanation: '让读者理解论文具体解决了哪个问题。', completionCheck: '对照引言与真实方法核对贡献表述。', applicability: 'applicable', kind: 'text', priority: 'high', status: loop.phase === 'plan' || options.unresolved ? 'open' : 'resolved', location: '引言第 3 段', action: '明确研究问题', evidence: loop.phase === 'plan' ? '' : '修订稿引言第 3 段说明研究问题' },
+      { id: 'R1.2', comment: '缺少外部验证', source: { path: loop.sourceFiles?.[0] || '', reviewer: 'R1', commentId: '2', location: '第 2 段', quote: '缺少外部验证' }, missingEvidence: '需要真实外部数据和实验结果；暂缺时保留待办。', kind: 'experiment', priority: 'high', status: 'open', location: '结果', action: '作者需补实验', evidence: '' },
     ], blockers: [], ...options.result };
     const raw = options.malformed ? 'No structured output' : '```research-loom-result\n' + JSON.stringify(result) + '\n```';
     state.update({ running: false, nodes: [...current.nodes, { kind: 'assistant', seq, turn, messageId: `reply-${seq}`, blocks: [{ kind: 'text', text: raw }], ...(options.interrupted ? { interrupted: true } : {}) }], turnEnds: new Map([...current.turnEnds, [turn, seq + 1]]) });

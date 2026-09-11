@@ -1,5 +1,8 @@
 import * as React from 'react';
 import { ENTRY_SCENARIOS, buildEntryPrompt } from './getting-started.js';
+import { RevisionIntakePanel } from './revision-intake-panel.js';
+import { normalizeReviewLoop } from './review-loop.js';
+import { revisionIntakeIdentity } from './revision-intake.js';
 const h = React.createElement;
 
 export const GUIDE_STYLES = `
@@ -22,7 +25,10 @@ export const GUIDE_STYLES = `
 .research-guide .guide-link{background:none;border:0;padding:5px 0;color:var(--dsw-alias-label-secondary,#60646f);text-align:left;text-decoration:underline;text-underline-offset:4px}
 .research-guide .guide-topline{display:flex;justify-content:space-between;align-items:center;gap:12px}
 .research-guide .guide-field{display:grid;gap:8px}
-.research-guide :is(input,select){box-sizing:border-box;width:100%;min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2,#dde1e8);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff);color:inherit;font:inherit}
+.research-guide :is(input,select,textarea){box-sizing:border-box;width:100%;min-width:0;padding:10px;border:1px solid var(--dsw-alias-border-l2,#dde1e8);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff);color:inherit;font:inherit}
+.research-guide textarea{resize:vertical}
+.research-guide .guide-intake{display:grid;gap:14px;overflow-wrap:anywhere}
+.research-guide button:disabled{cursor:default;opacity:.55}
 .research-guide .guide-step-select{border:0;border-bottom:1px solid var(--dsw-alias-border-l2,#e6e8ed);border-radius:0;padding:8px 0;color:var(--dsw-alias-label-secondary,#60646f)}
 .research-guide .guide-primary{width:100%;min-height:42px;border:0;border-radius:8px;background:var(--dsw-alias-brand-primary,#4d6bfe);color:white;font-weight:600;padding:10px 14px}
 .research-guide .guide-primary:hover{filter:brightness(.96)}
@@ -34,17 +40,33 @@ export const GUIDE_STYLES = `
 .research-guide .guide-footer{padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2,#e6e8ed)}
 `;
 
-export function GettingStartedPanel({ project, report, saveConfig, submitPrompt, language, cwd, disabled, writable }) {
+export function GettingStartedPanel({ project, report, saveConfig, submitPrompt, onStartReview, onReviewTasks, language, cwd, disabled, writable }) {
   const en = language === 'en';
   const [choosing, setChoosing] = React.useState(false);
   const [topic, setTopic] = React.useState(project.researchTopic);
   const [prepared, setPrepared] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const active = React.useRef('');
+  active.current = `${cwd}\n${project.entryScenario}\n${project.entryStep}`;
+  React.useEffect(() => { setChoosing(false); setPrepared(false); setBusy(false); setTopic(project.researchTopic); }, [cwd]);
   React.useEffect(() => setTopic(project.researchTopic), [project.researchTopic]);
   React.useEffect(() => setPrepared(false), [project.entryScenario, project.entryStep, topic, project.kickoffMode]);
   const scenario = ENTRY_SCENARIOS[project.entryScenario];
   const step = scenario?.steps[project.entryStep];
   const gathering = project.entryScenario === 'start' && project.entryStep === 1;
+  const intakeStep = project.entryScenario === 'revision' && project.entryStep === 0;
+  const review = normalizeReviewLoop(project.reviewLoop);
+  const linkedReview = review?.sourceType === 'files' && project.revisionIntake?.confirmed && review.intakeIdentity === revisionIntakeIdentity(project.revisionIntake);
+  const intakePanel = h(RevisionIntakePanel, { key: cwd, project, report, saveConfig, onStartReview, onPrepare: (...args) => prepare(...args), language, disabled, writable });
+  const prepare = async (revisionIntake = project.revisionIntake) => {
+    const context = active.current;
+    setBusy(true);
+    try {
+      const result = await submitPrompt(buildEntryPrompt({ ...project, researchTopic: topic, revisionIntake }, report, { language, cwd }), false, step.stage) === true;
+      if (active.current === context) setPrepared(result);
+      return result;
+    } finally { if (active.current === context) setBusy(false); }
+  };
   const topicField = h('label', { className: 'guide-field' }, en ? 'Research topic' : '研究主题',
     h('input', { 'aria-label': en ? 'Guide research topic' : '引导研究主题', value: topic, maxLength: 500, disabled: !writable,
       placeholder: en ? 'Leave blank if unsure' : '没想好可以留空',
@@ -65,29 +87,40 @@ export function GettingStartedPanel({ project, report, saveConfig, submitPrompt,
         h('button', { className: 'guide-link', onClick: () => setChoosing(true) }, en ? 'Change scenario' : '切换场景')),
       h('div', null, h('h2', null, step[language]), h('p', null, step[en ? 'outputEn' : 'outputZh'])),
       h('div', { className: 'guide-note' }, h('small', null, en ? 'You will need' : '需要准备'), h('p', null, step[en ? 'needEn' : 'needZh'])),
+      intakeStep ? linkedReview ? h(React.Fragment, null,
+        h('div', { className: 'guide-feedback', role: 'status' }, h('strong', null, en ? 'Continue this revision' : '接着处理本轮返修'),
+          h('small', null, `${en ? 'Manuscript' : '主稿'}：${review.manuscript}`),
+          h('p', null, ['awaiting', 'running'].includes(review.status) ? (en ? 'A task is running. Its results will update the revision list below.' : '任务正在执行，结果会更新到下方返修清单。')
+            : ['blocked', 'paused'].includes(review.status) ? (en ? 'Check the interruption and existing outputs below before continuing.' : '先查看下方的中断原因和已有稿件，再继续检查。')
+              : (en ? 'Review each comment, its evidence and completion checks below. Select a text task or inspect the resulting changes.' : '下方逐项列出意见、依据和完成条件。你可以选择文字任务，或检查已经生成的改动。')),
+          h('button', { className: 'guide-primary', onClick: onReviewTasks, disabled: !onReviewTasks }, en ? 'View revision tasks and changes' : '查看返修任务与实际改动')),
+        h('details', null, h('summary', null, en ? 'View or change the selected sources' : '查看或更换本轮材料'), intakePanel)) : intakePanel : null,
+      project.entryScenario === 'revision' && !intakeStep ? h('div', { className: 'guide-note' },
+        h('small', null, project.revisionIntake?.confirmed ? (en ? `Selected manuscript: ${project.revisionIntake.manuscript}` : `本轮主稿：${project.revisionIntake.manuscript}`)
+          : (en ? 'Confirm this round’s manuscript and original review sources first.' : '请先确认本轮主稿和原始审稿意见。')),
+        h('button', { className: 'guide-link', disabled: !writable, onClick: () => { void saveConfig({ entryStep: 0 }); } }, en ? 'Review source selection' : '查看或修改本轮材料')) : null,
       gathering ? topicField : h('details', null, h('summary', null, en ? 'Add a topic (optional)' : '补充研究主题（可选）'), topicField),
       gathering ? h(React.Fragment, null, h('label', { className: 'guide-field' }, en ? 'Sources' : '资料来源',
         h('select', { 'aria-label': en ? 'Source approach' : '资料来源', value: project.kickoffMode, disabled: !writable, onChange: (e) => { void saveConfig({ kickoffMode: e.target.value }); } },
           [['auto', '自动选择', 'Automatic'], ['local', '整理我提供的论文', 'Supplied papers'], ['web', '联网查找论文', 'Web search'], ['hybrid', '本地论文 + 联网补充', 'Local + web']].map(([id, zh, english]) => h('option', { key: id, value: id }, en ? english : zh)))),
         h('small', null, en ? 'Automatic uses local candidates when present. Web search requires host tools.' : '自动模式：有候选资料先整理，没有则检索。联网需要宿主提供工具。')) : null,
-      h('div', { className: 'guide-action' },
+      !intakeStep ? h('div', { className: 'guide-action' },
         h('button', { className: 'guide-primary', disabled: disabled || busy,
-          onClick: async () => {
-            setBusy(true);
-            try { setPrepared(await submitPrompt(buildEntryPrompt({ ...project, researchTopic: topic }, report, { language, cwd }), false, step.stage) === true); }
-            finally { setBusy(false); }
-          } }, busy ? (en ? 'Preparing…' : '正在准备…') : prepared ? (en ? 'Prepare again' : '重新准备任务') : (en ? 'Prepare task in chat' : '准备任务到对话框')),
+          onClick: () => prepare() }, busy ? (en ? 'Preparing…' : '正在准备…') : prepared ? (en ? 'Prepare again' : '重新准备任务') : (en ? 'Prepare task in chat' : '准备任务到对话框')),
         prepared ? h('div', { className: 'guide-feedback', role: 'status' },
           h('strong', null, en ? 'Your draft is ready' : '已放入对话框'),
           h('small', null, en ? 'Next: review the text in the main chat and press Send. Results will appear there.' : '下一步：到主对话框检查内容，点击发送。结果会出现在对话中。'))
-        : h('small', null, en ? 'Prepares an editable draft, without sending it.' : '先生成可编辑的提示词，不会自动发送。')),
-      h('label', { className: 'guide-field guide-footer' }, h('small', null, en ? 'After reviewing results, choose another step' : '核验结果后，可以切换下一步'),
+        : h('small', null, en ? 'Prepares an editable draft, without sending it.' : '先生成可编辑的提示词，不会自动发送。')) : prepared ? h('div', { className: 'guide-feedback', role: 'status' },
+          h('strong', null, en ? 'Your draft is ready' : '已放入对话框'),
+          h('small', null, en ? 'Check the source selection in the main chat and press Send.' : '下一步：到主对话框检查材料选择，点击发送。')) : null,
+      h('label', { className: 'guide-field guide-footer' }, h('small', null, linkedReview ? (en ? 'Optional: prepare a separate writing task' : '可选：准备其他写作任务；本轮返修在下方继续') : en ? 'After reviewing results, choose another step' : '核验结果后，可以切换下一步'),
         h('select', { className: 'guide-step-select', 'aria-label': en ? 'Guide step' : '引导步骤', value: project.entryStep, disabled: !writable,
           onChange: (e) => { void saveConfig({ entryStep: Number(e.target.value) }); } },
           scenario.steps.map((item, index) => h('option', { key: index, value: index }, `${index + 1} / 3 · ${item[language]}`)))),
       h('small', null, en ? 'Changing steps does not confirm research completion.' : '切换步骤不代表研究阶段已完成。')),
     !writable ? h('small', { role: 'status' }, en ? 'Settings are read-only; changes cannot be saved.' : '当前设置只读，无法保存选择。') : null,
     h('details', { className: 'guide-footer' }, h('summary', null, en ? 'How does this work?' : '不知道怎么操作？'),
-      h('p', null, en ? '1. Choose a task. 2. Prepare its draft. 3. Review and send it in the main chat. Check the response and files before continuing.' : '① 选择任务 → ② 准备提示词 → ③ 在主对话中发送。阅读回复、检查文件后，再继续下一步。'),
+      h('p', null, intakeStep ? (en ? 'Confirm the manuscript and original review files first, then start reading. Unknown review rounds are allowed; the task must check applicability. Review the resulting list before authorizing edits.' : '先确认主稿和原始意见文件，再启动读取。轮次不清楚可以继续，任务会检查意见是否仍适用；看到意见清单后再决定修改范围。')
+        : (en ? '1. Choose a task. 2. Prepare its draft. 3. Review and send it in the main chat. Check the response and files before continuing.' : '① 选择任务 → ② 准备提示词 → ③ 在主对话中发送。阅读回复、检查文件后，再继续下一步。')),
       h('p', null, en ? 'Use a working DSH model. Document reading and web search require host tools and may use model quota.' : '需要普通 DSH 对话能正常使用模型；全文读取和联网检索依赖宿主工具，发送后可能使用模型额度。')));
 }

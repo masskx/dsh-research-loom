@@ -1,3 +1,5 @@
+import { normalizeRevisionIntake, revisionIntakeIdentity, isRevisionPathAllowed } from './revision-intake.js';
+
 export const PAPER_STAGES = Object.freeze([
   { id: 'topic', zh: '选题立项', en: 'Topic', nextZh: '明确研究问题、贡献与边界', nextEn: 'Define the question, contribution, and scope' },
   { id: 'literature', zh: '文献综述', en: 'Literature', nextZh: '建立可追溯的文献矩阵与研究缺口', nextEn: 'Build a traceable literature matrix and research gap' },
@@ -122,9 +124,12 @@ function normalizeWorkflow(value) {
 }
 
 export function normalizeProjectState(value) {
+  const revisionIntake = normalizeRevisionIntake(value?.revisionIntake);
+  if ([revisionIntake.manuscript, ...revisionIntake.reviewFiles].filter(Boolean).some(path => !isRevisionPathAllowed(path, value))) revisionIntake.confirmed = false;
   return {
     entryScenario: ['paper', 'start', 'revision'].includes(value?.entryScenario) ? value.entryScenario : '',
     entryStep: Number.isInteger(value?.entryStep) && value.entryStep >= 0 && value.entryStep <= 2 ? value.entryStep : 0,
+    revisionIntake,
     stage: STAGE_IDS.has(value?.stage) ? value.stage : 'topic',
     updatedAt: typeof value?.updatedAt === 'string' ? value.updatedAt : '',
     source: value?.source === 'auto' || value?.source === 'manual' ? value.source : 'manual',
@@ -176,7 +181,14 @@ export function updateProjectConfig(projects, cwd, patch) {
   const key = normalizeWorkspaceKey(cwd);
   if (!key) throw new TypeError('A workspace path is required');
   const previous = projects?.[key] && typeof projects[key] === 'object' ? projects[key] : {};
-  return { ...(projects && typeof projects === 'object' ? projects : {}), [key]: { ...previous, ...(patch && typeof patch === 'object' ? patch : {}) } };
+  const changes = patch && typeof patch === 'object' ? { ...patch } : {};
+  if (Object.hasOwn(changes, 'revisionIntake')) {
+    changes.revisionIntake = normalizeRevisionIntake(changes.revisionIntake);
+    if (revisionIntakeIdentity(previous.revisionIntake) !== revisionIntakeIdentity(changes.revisionIntake)) changes.revisionIntake.confirmed = false;
+  }
+  const next = { ...previous, ...changes };
+  if (next.revisionIntake) next.revisionIntake = normalizeProjectState(next).revisionIntake;
+  return { ...(projects && typeof projects === 'object' ? projects : {}), [key]: next };
 }
 
 export function analyzePaperArtifacts(candidates, scannedAt = '', options = {}) {
